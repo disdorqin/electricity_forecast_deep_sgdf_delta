@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from .dataset import DeltaSequenceDataset, build_training_datasets
+from .dataset import DeltaSequenceDataset, build_training_datasets, _collate_fn
 from .losses import CombinedLoss
 from .metrics import smape_floor50
 from .model import DeepSGDFDeltaConfig, build_model
@@ -83,18 +83,6 @@ def _set_seed(seed: int) -> None:
         torch.use_deterministic_algorithms(True, warn_only=True)
     except Exception:
         pass
-
-
-def _collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
-    """Custom collate for variable-length batches."""
-    return {
-        "features": torch.stack([b["features"] for b in batch]),
-        "segment_id": torch.stack([b["segment_id"] for b in batch]),
-        "da_anchor": torch.stack([b["da_anchor"] for b in batch]),
-        "hour": torch.stack([b["hour"] for b in batch]),
-        "delta_target": torch.stack([b["delta_target"] for b in batch]),
-        "rt_actual": torch.stack([b["rt_actual"] for b in batch]),
-    }
 
 
 def train_one_epoch(

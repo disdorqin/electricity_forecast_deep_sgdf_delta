@@ -22,11 +22,19 @@ import torch
 from torch.utils.data import Dataset
 
 # ── SGDFNet integration ──────────────────────────────────────────────
-# We import SGDFNet's data contract to reuse feature engineering
-_MAIN_PROJECT = Path(__file__).resolve().parent.parent.parent.parent
-_SGDFNET_SRC = _MAIN_PROJECT / "SGDFNet" / "src"
-if str(_SGDFNET_SRC) not in sys.path:
-    sys.path.insert(0, str(_SGDFNET_SRC))
+# We import SGDFNet's data contract to reuse feature engineering.
+# Try multiple locations: same repo, sibling directory, hardcoded path.
+_THIS_DIR = Path(__file__).resolve().parent
+_CANDIDATES = [
+    _THIS_DIR.parent.parent / "SGDFNet" / "src",                          # inside same repo
+    _THIS_DIR.parent.parent / "electricity_forecast_model2.0_exp" / "SGDFNet" / "src",  # parent
+    _THIS_DIR.parent.parent.parent / "electricity_forecast_model2.0_exp" / "SGDFNet" / "src",  # sibling
+    Path(r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp\SGDFNet\src"),
+]
+for _p in _CANDIDATES:
+    if _p.exists() and str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+        break
 
 from sgdfnet.data_contract import (  # noqa: E402
     TIMESTAMP_COL,
@@ -253,3 +261,19 @@ def build_predict_dataset(
 
     ds = DeltaSequenceDataset(target_frame, feature_cols, window_days, mode="predict")
     return ds, feature_cols
+
+
+def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    """Collate function for DataLoader — stacks variable-length batches."""
+    return {
+        "features": torch.stack([b["features"] for b in batch]),
+        "segment_id": torch.stack([b["segment_id"] for b in batch]),
+        "da_anchor": torch.stack([b["da_anchor"] for b in batch]),
+        "hour": torch.stack([b["hour"] for b in batch]),
+        "delta_target": torch.stack([b["delta_target"] for b in batch]),
+        "rt_actual": torch.stack([b["rt_actual"] for b in batch]),
+    }
+
+
+# Alias for backward compatibility
+_collate_fn = collate_fn

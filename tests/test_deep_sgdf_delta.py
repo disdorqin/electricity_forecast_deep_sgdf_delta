@@ -83,8 +83,6 @@ class TestBusinessDayAlignment:
 
     def test_midnight_alignment(self):
         """00:00 of calendar day D should have business_day = D-1 and target_hour = 24."""
-        from models.deep_sgdf_delta.dataset import add_business_time_columns
-        # Actually imported from sgdfnet.data_contract
         from sgdfnet.data_contract import add_business_time_columns
 
         df = pd.DataFrame({
