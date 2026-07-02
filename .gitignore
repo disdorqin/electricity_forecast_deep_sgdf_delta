@@ -1,0 +1,46 @@
+# DeepSGDFDelta / TrendKnight
+# Lightweight deep model for realtime electricity price trend prediction
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data and outputs (NEVER commit)
+reports/local/
+outputs/
+data/local_ledger/
+*.pkl
+*.pt
+*.bin
+*.safetensors
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Catboost
+catboost_info/
+
+# Temporary
+tmp/
+temp/

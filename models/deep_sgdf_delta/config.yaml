@@ -1,0 +1,71 @@
+# DeepSGDFDelta / TrendKnight — Default Configuration
+# Lightweight deep model for realtime electricity price trend prediction
+
+# ── Data ──────────────────────────────────────────────────────────────
+# Path to raw data (same as SGDFNet production config)
+data_path: data/shandong_pmos_hourly.xlsx
+
+# SGDFNet baseline config for reference and blend
+sgdfnet_config_path: SGDFNet/configs/cutoff_recovery_2026_diag_a_prune_actualside.yaml
+
+# Evaluation window
+start_day: "2026-01-01"
+end_day: "2026-05-11"
+decision_hour: 15
+val_days: 30
+train_min_rows: 2160
+
+# ── Feature Config (mirrors SGDFNet production) ──────────────────────
+feature_config:
+  include_forecast_columns: true
+  include_actual_history_columns: false
+  use_visible_actual_history: true
+  include_delta_history_features: true
+  include_tf_moving_average_features: false
+  include_static_group_graph_features: false
+  include_weekly_history_features: false
+  include_forecast_residual_history_features: false
+  include_segment_local_stats: false
+  include_forecast_pressure_interactions: false
+  include_calendar_features: true
+  include_engineered_forecast_features: true
+
+# ── Model Architecture ───────────────────────────────────────────────
+model:
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.1
+  backbone: tcn          # tcn or gru
+  tcn_kernel_size: 3
+  tcn_dilation_base: 2
+  segment_embed_dim: 8
+  use_global_residual: true
+  global_residual_weight: 0.3
+  amp_enabled: false
+
+# ── Training ─────────────────────────────────────────────────────────
+training:
+  epochs: 30
+  batch_size: 256
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  early_stopping_patience: 5
+  device: auto           # auto, cpu, cuda
+  window_days: 7         # sequence window: 7~14 days
+  seed: 42
+
+# ── Loss Weights ─────────────────────────────────────────────────────
+loss:
+  w_smape: 0.55
+  w_delta_mae: 0.25
+  w_period: 0.10
+  w_smooth: 0.10
+  period_916_weight: 2.0
+
+# ── Blend Mode ───────────────────────────────────────────────────────
+blend:
+  mode: deep_only        # deep_only | sgdfnet_blend | sgdfnet_residual
+  weight_search: [0.2, 0.4, 0.6, 0.8]
+
+# ── Output ───────────────────────────────────────────────────────────
+output_root: reports/local/deep_sgdf_delta
