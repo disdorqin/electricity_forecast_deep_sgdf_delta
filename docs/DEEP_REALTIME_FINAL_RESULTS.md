@@ -6,43 +6,41 @@
 
 ## Summary
 
-| Key Metric | Value |
-|------------|-------|
-| n_features | 2 → **34** |
-| Feature Verdict | **FORMAL_READY** |
-| SGDFNet coverage (with fallback) | 99.9% |
-| SGDFNet real coverage | 0% (no real predictions available) |
-| Calendar features | ✅ 8/8 |
-| Lag features | ✅ 11/11 |
-| Leakage | ✅ Passed |
-| Test sMAPE (Feb 2026, TCN) | **26.69%** |
-| Test sMAPE (Feb 2026, GRU) | **26.69%** |
-| Test sMAPE (Feb 2026, Transformer) | **26.70%** |
-| DeepFinal-1 baseline (2 feat) | **26.76%** |
-| SGDFNet reference | ~16.59% |
-| **Milestone Target** | **< 20%** |
+| Key Metric | DeepFinal-1 | DeepFinal-2 (修正后) |
+|------------|-------------|---------------------|
+| n_features | 2 | **36** |
+| Feature Verdict | N/A | **FALLBACK_READY** (not FORMAL_READY) |
+| formal_train_ready | False | **False** (requires real SGDFNet) |
+| FULL_DAY leakage | 未知 | ✅ **无** (business_day aligned) |
+| SGDFNet real coverage | 0% | **0%** (no real predictions) |
+| SGDFNet effective coverage | 99.9% (fallback) | **99.9%** (fallback) |
+| Calendar features | ❌ | ✅ 8/8 |
+| Lag features | ❌ | ✅ 13/13 |
+| Leakage | — | ✅ Passed |
+| Metric status | 未标记 | **SMOKE_ONLY** |
+| Test sMAPE (Feb 2026, TCN) | 26.76% | **26.69%** (SMOKE_ONLY) |
+| SGDFNet reference | ~16.59% | — |
+
+## Verdict
+
+```
+FORMAL_READY:          ❌ (sgdfnet_real_coverage=0%, fallback used)
+FALLBACK_READY:        ✅ (n_features=36, effective coverage ≥95%)
+DeepFinal-3 blocked:   YES — missing real SGDFNet predictions
+```
 
 ## Progress
 
-| Phase | n_features | sMAPE | Verdict | Gap |
-|-------|-----------|-------|---------|-----|
+| Phase | n_features | sMAPE | Verdict | Blocker |
+|-------|-----------|-------|---------|---------|
 | DeepFinal-1 | 2 | 26.76% | NO-GO | Feature pipeline missing |
-| DeepFinal-2 (fallback) | 34 | 26.69% | NO-GO | Missing real SGDFNet predictions |
-| DeepFinal-3 (expected) | 34+ | ~16-18% | ACCEPTABLE | Need real SGDFNet predictions |
-
-## Feature Pipeline Readiness
-
-```
-FORMAL_READY
-├── n_features >= 25:       ✅ 34
-├── sgdfnet_coverage >= 95%: ✅ 99.9% (with fallback)
-├── no high-risk leakage:   ✅
-└── required_missing <= 3:  ✅ 2 (load_forecast, provincial_load_forecast)
-```
+| DeepFinal-2 (修正前) | 34 | 26.69% | FORMAL_READY (误判) | — |
+| DeepFinal-2 (修正后) | 36 | 26.69% (SMOKE_ONLY) | FALLBACK_READY | Real SGDFNet predictions |
+| DeepFinal-3 | 36+ | — | — | **缺少真实 SGDFNet 预测文件** |
 
 ## Files
 
-- Feature audit: `reports/local/deep_final/features/realtime_feature_audit.json`
+- Feature audit (fallback): `reports/local/deep_final/features_fallback/`
+- Feature hardening report: `docs/DEEPFINAL_3A_FEATURE_HARDENING_REPORT.md`
 - Training artifacts: `artifacts/trendknight_rt/exp_tcn_full_2026_02/`
-- Training artifacts: `artifacts/trendknight_rt/exp_gru_full_2026_02/`
-- Training artifacts: `artifacts/trendknight_rt/exp_transformer_full_2026_02/`
+- SGDFNet prediction contract: `docs/SGDFNET_PREDICTION_INPUT_CONTRACT.md`

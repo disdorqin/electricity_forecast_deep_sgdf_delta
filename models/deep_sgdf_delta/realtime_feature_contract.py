@@ -48,11 +48,14 @@ CALENDAR_FEATURES = [
 
 LAG_FEATURES = [
     # Historical lag features (visible actuals up to cutoff)
+    # FULL_DAY: only D-1 and earlier; no same-day rolling
     "rt_lag_1h", "rt_lag_2h", "rt_lag_3h",
     "rt_lag_24h", "rt_lag_48h",
     "rt_mean_6h", "rt_std_6h",
     "rt_mean_24h", "rt_std_24h",
     "delta_lag_24h", "delta_lag_48h",
+    "previous_day_delta_mean_24h",
+    "previous_day_delta_std_24h",
 ]
 
 SGDFNET_FEATURES = [

@@ -467,6 +467,6 @@ class TestAuditFeatureCoverage:
         result = build_realtime_features(df, sgdfnet_pred_df=sgd)
 
         audit = audit_feature_coverage(result)
-        assert "sgdfnet_coverage" in audit
-        assert "sgdfnet_missing_rows" in audit
+        assert "sgdfnet_effective_coverage" in audit
+        assert "sgdfnet_real_coverage" in audit
         assert "sgdfnet_fallback_used" in audit

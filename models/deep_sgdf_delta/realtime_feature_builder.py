@@ -100,6 +100,8 @@ REQUIRED_LAG_FEATURES: list[str] = [
     "rt_mean_6h", "rt_std_6h",
     "rt_mean_24h", "rt_std_24h",
     "delta_lag_24h", "delta_lag_48h",
+    "previous_day_delta_mean_24h",
+    "previous_day_delta_std_24h",
 ]
 
 REQUIRED_CALENDAR_FEATURES: list[str] = [
@@ -215,6 +217,7 @@ def build_realtime_features(  # noqa: C901 (complexity ok — feature builder)
         df,
         sgdfnet_pred_df=sgdfnet_pred_df,
         allow_fallback=allow_sgdfnet_fallback,
+        mode=mode,
     )
 
     # ── Step 9: Add forecast-side features ──────────────────────────
@@ -291,19 +294,23 @@ def _add_lag_features(
     """Add lag features from historical actuals.
 
     **FULL_DAY mode** (default):
-        Only D-1 and earlier lags are used.  Same-day lags are NOT
-        included because the target-hour actual is unavailable.
+        Only D-1 and earlier lags are used.  All features are computed
+        from **complete previous-day data only** — no same-day actuals
+        are ever consumed.
 
-        Lags generated:
-        - ``rt_lag_24h``: same-hour yesterday
+        Lags generated (all cutoff-safe):
+        - ``rt_lag_24h``: same-hour yesterday  (D-1, same hour_business)
         - ``rt_lag_48h``: same-hour two days ago
-        - ``rt_mean_24h``: mean of last 24 hourly actuals (all on D-1)
-        - ``rt_std_24h``: std of last 24 hourly actuals
+        - ``rt_mean_24h``: D-1 full-day mean of rt_actual  (previous_day_rt_mean)
+        - ``rt_std_24h``: D-1 full-day std of rt_actual   (previous_day_rt_std)
         - ``delta_lag_24h``: delta (rt-da) same-hour yesterday
         - ``delta_lag_48h``: delta two days ago
+        - ``previous_day_delta_mean_24h``: D-1 mean of delta
+        - ``previous_day_delta_std_24h``: D-1 std of delta
 
-        Intra-day lags (rt_lag_1h, rt_lag_2h, rt_lag_3h, rt_mean_6h,
-        rt_std_6h) are set to 0 and MUST NOT be used.
+        Same-day rolling features (rt_lag_1h, rt_lag_2h, rt_lag_3h,
+        rt_mean_6h, rt_std_6h) are set to 0 — they MUST NOT be used
+        in FULL_DAY mode because the target-hour actual is unavailable.
 
     **INTRADAY mode**:
         Same-day historical actuals (hours before the current target hour)
@@ -322,16 +329,57 @@ def _add_lag_features(
     n = len(df)
     zero_variance_lags: list[str] = []
 
-    # ── Day-level lags (always available in both modes) ────────────
-    # These use shift(24) = same hour previous day, shift(48) = 2 days ago
+    # ── Hour-level lags via shift (same hour previous days) ─────────
+    # These are safe: shift(24) = same hour D-1, shift(48) = same hour D-2
     df["rt_lag_24h"] = df[rt_actual_col].shift(24)
     df["rt_lag_48h"] = df[rt_actual_col].shift(48)
     df["delta_lag_24h"] = (df[rt_actual_col] - df[da_anchor_col]).shift(24)
     df["delta_lag_48h"] = (df[rt_actual_col] - df[da_anchor_col]).shift(48)
 
-    # Rolling statistics over the last 24 hours (D-1 period)
-    df["rt_mean_24h"] = df[rt_actual_col].shift(1).rolling(24, min_periods=1).mean()
-    df["rt_std_24h"] = df[rt_actual_col].shift(1).rolling(24, min_periods=1).std()
+    # ── Day-level stats (previous day only, no same-day rolling) ────
+    # Compute per-business-day stats on D-1, then merge to current day.
+    # This avoids any leakage of same-day actuals.
+    if "business_day" in df.columns:
+        daily_stats = (
+            df.groupby("business_day")[rt_actual_col]
+            .agg(["mean", "std"])
+            .rename(columns={"mean": "rt_mean_24h", "std": "rt_std_24h"})
+        )
+        # Shift by 1 business_day: D's stats come from D-1
+        daily_stats_shifted = daily_stats.shift(1)
+        df = df.merge(
+            daily_stats_shifted[["rt_mean_24h", "rt_std_24h"]],
+            left_on="business_day", right_index=True,
+            how="left", suffixes=("", "_daily"),
+        )
+        # If merge created duplicate columns, prefer the daily-computed ones
+        if "rt_mean_24h_daily" in df.columns:
+            df["rt_mean_24h"] = df["rt_mean_24h_daily"].fillna(df["rt_mean_24h"])
+            df = df.drop(columns=["rt_mean_24h_daily"])
+        if "rt_std_24h_daily" in df.columns:
+            df["rt_std_24h"] = df["rt_std_24h_daily"].fillna(df["rt_std_24h"])
+            df = df.drop(columns=["rt_std_24h_daily"])
+
+        # Same for delta
+        df["_delta"] = df[rt_actual_col] - df[da_anchor_col]
+        delta_daily = (
+            df.groupby("business_day")["_delta"]
+            .agg(["mean", "std"])
+            .rename(columns={"mean": "previous_day_delta_mean_24h",
+                             "std": "previous_day_delta_std_24h"})
+        ).shift(1)
+        df = df.merge(
+            delta_daily[["previous_day_delta_mean_24h", "previous_day_delta_std_24h"]],
+            left_on="business_day", right_index=True,
+            how="left",
+        )
+        df = df.drop(columns=["_delta"])
+    else:
+        # Fallback: shift-based (less accurate but still leak-safe for D-1)
+        df["rt_mean_24h"] = df[rt_actual_col].shift(24).rolling(24, min_periods=1).mean()
+        df["rt_std_24h"] = df[rt_actual_col].shift(24).rolling(24, min_periods=1).std()
+        df["previous_day_delta_mean_24h"] = 0.0
+        df["previous_day_delta_std_24h"] = 0.0
 
     # ── Intra-day lags (mode-dependent) ────────────────────────────
     if mode == "INTRADAY":
@@ -373,6 +421,7 @@ def _integrate_sgdfnet(
     sgdfnet_pred_df: pd.DataFrame | None = None,
     allow_fallback: bool = False,
     timestamp_col: str = "ds",
+    mode: Literal["FULL_DAY", "INTRADAY"] = "FULL_DAY",
 ) -> pd.DataFrame:
     """Integrate SGDFNet predictions into the feature table.
 
@@ -479,13 +528,34 @@ def _integrate_sgdfnet(
     # residual = rt_actual - sgdfnet_pred
     if "rt_actual" in df.columns and "sgdfnet_pred" in df.columns:
         sgdfnet_residual = df["rt_actual"] - df["sgdfnet_pred"]
-        df["sgdfnet_residual_lag_1h"] = sgdfnet_residual.shift(1)
+
+        # FULL_DAY: sgdfnet_residual_lag_1h leaks same-day data → must be 0
+        if mode == "FULL_DAY":
+            df["sgdfnet_residual_lag_1h"] = 0.0
+        else:
+            df["sgdfnet_residual_lag_1h"] = sgdfnet_residual.shift(1)
+
+        # sgdfnet_residual_lag_24h is D-1 same hour → safe in both modes
         df["sgdfnet_residual_lag_24h"] = sgdfnet_residual.shift(24)
 
-        # 7-day rolling mean of SGDFNet residual
-        df["sgdfnet_residual_mean_7d"] = (
-            sgdfnet_residual.shift(1).rolling(168, min_periods=1).mean()
-        )  # 168 = 7 * 24 hours
+        # sgdfnet_residual_mean_7d: 7-day rolling mean of residual,
+        # computed per hour_business across business_days (no same-day leak).
+        if "business_day" in df.columns and "hour_business" in df.columns:
+            # Group by hour_business, sort by business_day, then rolling(7)
+            df["_bd_num"] = df["business_day"].rank(method="dense").astype(int)
+            df["_resid"] = sgdfnet_residual
+            residual_7d = (
+                df.sort_values(["hour_business", "_bd_num"])
+                .groupby("hour_business")["_resid"]
+                .transform(lambda s: s.shift(1).rolling(7, min_periods=1).mean())
+            )
+            df["sgdfnet_residual_mean_7d"] = residual_7d.fillna(0.0)
+            df = df.drop(columns=["_bd_num", "_resid"])
+        else:
+            # Fallback: shift(24*7) = 7 days ago, safer than shift(1).rolling(168)
+            df["sgdfnet_residual_mean_7d"] = (
+                sgdfnet_residual.shift(24 * 7).rolling(24 * 7, min_periods=1).mean()
+            )
 
         # Fill NaN
         for col in ["sgdfnet_residual_lag_1h", "sgdfnet_residual_lag_24h",
@@ -494,19 +564,30 @@ def _integrate_sgdfnet(
     # ── Coverage stats ─────────────────────────────────────────────
     present_mask = df["sgdfnet_pred"].notna()
     n_present = int(present_mask.sum())
-    coverage_pct = (n_present / total_rows * 100) if total_rows > 0 else 0.0
+    effective_coverage = (n_present / total_rows * 100) if total_rows > 0 else 0.0
+
+    # Real coverage: rows where sgdfnet_pred came from a real prediction file
+    # (not from fallback).  When fallback_used, the real coverage excludes
+    # fallback rows.
+    if n_fallback > 0:
+        n_real = n_present - n_fallback
+    else:
+        n_real = n_present
+    real_coverage = (n_real / total_rows * 100) if total_rows > 0 else 0.0
 
     # Attach coverage metadata as DataFrame attributes
-    df.attrs["sgdfnet_coverage"] = coverage_pct
+    df.attrs["sgdfnet_coverage"] = effective_coverage
+    df.attrs["sgdfnet_effective_coverage"] = effective_coverage
+    df.attrs["sgdfnet_real_coverage"] = real_coverage
     df.attrs["sgdfnet_missing_rows"] = n_missing
     df.attrs["sgdfnet_fallback_used"] = n_fallback > 0
     df.attrs["sgdfnet_fallback_count"] = n_fallback
     df.attrs["sgdfnet_source"] = "file" if sgdfnet_pred_df is not None else "column"
 
     logger.info(
-        "SGDFNet integration complete: coverage=%.1f%%, "
-        "missing=%d, fallback=%s (%d rows)",
-        coverage_pct, n_missing, n_fallback > 0, n_fallback,
+        "SGDFNet integration complete: effective_coverage=%.1f%%, "
+        "real_coverage=%.1f%%, missing=%d, fallback=%s (%d rows)",
+        effective_coverage, real_coverage, n_missing, n_fallback > 0, n_fallback,
     )
 
     return df
@@ -579,14 +660,37 @@ def audit_feature_coverage(  # noqa: C901
         - ``n_features``
         - ``required_present`` / ``required_missing``
         - ``optional_present``
-        - ``sgdfnet_coverage`` / ``sgdfnet_missing_rows`` /
-          ``sgdfnet_fallback_used``
+        - ``sgdfnet_real_coverage`` / ``sgdfnet_effective_coverage`` /
+          ``sgdfnet_missing_rows`` / ``sgdfnet_fallback_used``
         - ``lag_feature_coverage``: fraction of lag features present
         - ``calendar_feature_generated``: bool
         - ``leakage_checked``: bool
-        - ``formal_train_ready``: bool
-        - ``verdict``: ``"FORMAL_READY"``, ``"PARTIAL_READY"``, or
-          ``"NOT_READY"``.
+        - ``formal_train_ready``: bool (True only when verdict is FORMAL_READY)
+        - ``verdict``: ``"FORMAL_READY"``, ``"FALLBACK_READY"``,
+          ``"PARTIAL_READY"``, or ``"NOT_READY"``.
+
+    Verdict rules::
+
+        FORMAL_READY:
+          n_features >= 25
+          sgdfnet_real_coverage >= 95
+          fallback_used == False
+          no high-risk leakage
+          required_missing <= 3
+
+        FALLBACK_READY:
+          n_features >= 25
+          sgdfnet_effective_coverage >= 95
+          fallback_used == True
+          no high-risk leakage
+
+        PARTIAL_READY:
+          n_features >= 15
+          sgdfnet_real_coverage >= 80
+          fallback_used == False
+
+        NOT_READY:
+          otherwise
     """
     if required_features is None:
         required_features = list(REQUIRED_FEATURES)
@@ -608,23 +712,36 @@ def audit_feature_coverage(  # noqa: C901
     lag_present = [c for c in REQUIRED_LAG_FEATURES if c in present_cols]
     lag_coverage = len(lag_present) / len(REQUIRED_LAG_FEATURES) if REQUIRED_LAG_FEATURES else 0.0
 
-    # SGDFNet coverage
-    sgdfnet_coverage = df.attrs.get("sgdfnet_coverage", 0.0)
+    # SGDFNet coverage — distinguish real vs effective
+    sgdfnet_effective = df.attrs.get("sgdfnet_effective_coverage",
+                                      df.attrs.get("sgdfnet_coverage", 0.0))
+    sgdfnet_real = df.attrs.get("sgdfnet_real_coverage",
+                                 df.attrs.get("sgdfnet_coverage", 0.0))
     sgdfnet_missing = df.attrs.get("sgdfnet_missing_rows", 0)
     sgdfnet_fallback = df.attrs.get("sgdfnet_fallback_used", False)
+    sgdfnet_source = df.attrs.get("sgdfnet_source", "unknown")
+    sgdfnet_fallback_count = df.attrs.get("sgdfnet_fallback_count", 0)
 
     # Leakage check
     leakage_ok = check_leakage(df)
 
-    # Formal readiness
+    # Formal readiness with new verdict rules
     n_features = len(all_present)
     n_req_missing = len(req_missing)
 
-    high_risk_leakage = False  # check_leakage already validated
-
-    if n_features >= 25 and sgdfnet_coverage >= 95.0 and n_req_missing <= 3 and leakage_ok:
+    # FORMAL_READY: real SGDFNet, no fallback
+    if (n_features >= 25 and sgdfnet_real >= 95.0
+            and not sgdfnet_fallback
+            and leakage_ok
+            and n_req_missing <= 3):
         verdict = "FORMAL_READY"
-    elif n_features >= 15 and sgdfnet_coverage >= 80.0:
+    # FALLBACK_READY: effective coverage via fallback
+    elif (n_features >= 25 and sgdfnet_effective >= 95.0
+          and sgdfnet_fallback
+          and leakage_ok):
+        verdict = "FALLBACK_READY"
+    # PARTIAL_READY: real SGDFNet at partial coverage
+    elif n_features >= 15 and sgdfnet_real >= 80.0 and not sgdfnet_fallback:
         verdict = "PARTIAL_READY"
     else:
         verdict = "NOT_READY"
@@ -636,10 +753,12 @@ def audit_feature_coverage(  # noqa: C901
         "n_required_missing": n_req_missing,
         "optional_present": opt_present,
         "n_optional_present": len(opt_present),
-        "sgdfnet_coverage": sgdfnet_coverage,
+        "sgdfnet_effective_coverage": sgdfnet_effective,
+        "sgdfnet_real_coverage": sgdfnet_real,
         "sgdfnet_missing_rows": sgdfnet_missing,
         "sgdfnet_fallback_used": sgdfnet_fallback,
-        "sgdfnet_source": df.attrs.get("sgdfnet_source", "unknown"),
+        "sgdfnet_fallback_count": sgdfnet_fallback_count,
+        "sgdfnet_source": sgdfnet_source,
         "calendar_feature_generated": calendar_ok,
         "calendar_features_present": cal_present,
         "lag_feature_coverage": lag_coverage,

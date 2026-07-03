@@ -90,9 +90,11 @@ def generate_audit_report(audit: dict, cn_audit: dict, data_shape: tuple) -> str
     lines.append("")
     lines.append("## SGDFNet Coverage")
     lines.append("")
-    lines.append(f"- **Coverage**: {audit['sgdfnet_coverage']:.1f}%")
+    lines.append(f"- **Real coverage**: {audit['sgdfnet_real_coverage']:.1f}%")
+    lines.append(f"- **Effective coverage**: {audit['sgdfnet_effective_coverage']:.1f}%")
     lines.append(f"- **Missing rows**: {audit['sgdfnet_missing_rows']}")
     lines.append(f"- **Fallback used**: {audit['sgdfnet_fallback_used']}")
+    lines.append(f"- **Fallback count**: {audit.get('sgdfnet_fallback_count', 0)}")
     lines.append(f"- **Source**: {audit.get('sgdfnet_source', 'N/A')}")
     lines.append("")
     lines.append("## Calendar Features")
@@ -255,7 +257,9 @@ def main() -> None:
     print(f"  Verdict:           {audit['verdict']}")
     print(f"  n_features:        {audit['n_features']}")
     print(f"  Required missing:  {len(audit['required_missing'])}")
-    print(f"  SGDFNet coverage:  {audit['sgdfnet_coverage']:.1f}%")
+    print(f"  SGDFNet real cov:  {audit['sgdfnet_real_coverage']:.1f}%")
+    print(f"  SGDFNet eff cov:   {audit['sgdfnet_effective_coverage']:.1f}%")
+    print(f"  Fallback used:     {audit['sgdfnet_fallback_used']}")
     print(f"  Calendar OK:       {audit['calendar_feature_generated']}")
     print(f"  Lag coverage:      {audit['lag_feature_coverage']:.0%}")
     print(f"  Leakage OK:        {audit['leakage_checked']}")
@@ -263,11 +267,15 @@ def main() -> None:
     print(f"  Reports:           {out_dir}")
     print("=" * 60)
 
-    if audit["verdict"] == "NOT_READY":
+    if audit["verdict"] in ("NOT_READY", "FALLBACK_READY"):
         logger.warning(
-            "Feature pipeline NOT READY for formal training. "
-            "Missing %d required features: %s",
-            len(audit["required_missing"]), audit["required_missing"],
+            "Feature pipeline %s for formal training (verdict=%s). "
+            "Missing %d required features. %s",
+            "NOT READY" if audit["verdict"] == "NOT_READY" else "FALLBACK ONLY",
+            audit["verdict"],
+            len(audit["required_missing"]),
+            f"SGDFNet real coverage: {audit['sgdfnet_real_coverage']:.1f}% "
+            f"(effective: {audit['sgdfnet_effective_coverage']:.1f}%)",
         )
 
 

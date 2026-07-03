@@ -935,6 +935,7 @@ def run_training(
         json.dump(manifest, f, indent=2, ensure_ascii=False, default=str)
 
     # train_manifest.json
+    is_fallback_run = args.allow_sgdfnet_fallback or args.fast_dev_run
     train_manifest = {
         "model_profile": args.model_profile,
         "target_month": target_month,
@@ -961,13 +962,16 @@ def run_training(
         # Phase DeepFinal-2 feature pipeline info
         "feature_mode": args.feature_mode,
         "n_features": input_dim,
-        "sgdfnet_fallback_used": args.allow_sgdfnet_fallback or args.fast_dev_run,
+        "sgdfnet_fallback_used": is_fallback_run,
         "sgdfnet_coverage": manifest.get("sgdfnet_coverage", 0.0),
         "feature_verdict": (feature_info or {}).get("verdict", "unknown"),
         "required_present": (feature_info or {}).get("required_present", []),
         "required_missing": (feature_info or {}).get("required_missing", []),
         "calendar_feature_generated": (feature_info or {}).get("calendar_feature_generated", False),
         "lag_feature_coverage": (feature_info or {}).get("lag_feature_coverage", 0.0),
+        # Metric status: SMOKE_ONLY when fallback used
+        "metric_status": "SMOKE_ONLY" if is_fallback_run else "FORMAL",
+        "formal_metric": not is_fallback_run,
     }
     with open(output_dir / "train_manifest.json", "w", encoding="utf-8") as f:
         json.dump(train_manifest, f, indent=2, ensure_ascii=False)
@@ -1081,6 +1085,19 @@ def main() -> None:
             "feature_mode=minimal is for smoke only — "
             "do NOT use for formal training evaluation."
         )
+
+    # ── Safety check: formal full mode requires SGDFNet predictions ─
+    if args.feature_mode == "full" and not args.fast_dev_run:
+        has_real_sgdfnet = (
+            args.sgdfnet_predictions is not None
+            and Path(args.sgdfnet_predictions).exists()
+        )
+        if not has_real_sgdfnet and not args.allow_sgdfnet_fallback:
+            raise ValueError(
+                "Formal full-feature training requires real SGDFNet predictions.\n"
+                "  Provide --sgdfnet-predictions <path> or use --allow-sgdfnet-fallback\n"
+                "  for smoke/predict only (metrics will be marked SMOKE_ONLY)."
+            )
 
     # ── Load data ───────────────────────────────────────────────────
     raw_df = load_raw_data(
