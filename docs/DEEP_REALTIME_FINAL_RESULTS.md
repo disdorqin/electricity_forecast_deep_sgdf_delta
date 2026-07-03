@@ -1,46 +1,70 @@
-# DeepFinal-2 Realtime Model Results Summary
+# Deep Realtime Model — Final Results
 
 **Date:** 2026-07-03
+**Status:** ARCHIVED — MODEL_NO_GO
 
 ---
 
 ## Summary
 
-| Key Metric | DeepFinal-1 | DeepFinal-2 (修正后) |
-|------------|-------------|---------------------|
-| n_features | 2 | **36** |
-| Feature Verdict | N/A | **FALLBACK_READY** (not FORMAL_READY) |
-| formal_train_ready | False | **False** (requires real SGDFNet) |
-| FULL_DAY leakage | 未知 | ✅ **无** (business_day aligned) |
-| SGDFNet real coverage | 0% | **0%** (no real predictions) |
-| SGDFNet effective coverage | 99.9% (fallback) | **99.9%** (fallback) |
-| Calendar features | ❌ | ✅ 8/8 |
-| Lag features | ❌ | ✅ 13/13 |
-| Leakage | — | ✅ Passed |
-| Metric status | 未标记 | **SMOKE_ONLY** |
-| Test sMAPE (Feb 2026, TCN) | 26.76% | **26.69%** (SMOKE_ONLY) |
-| SGDFNet reference | ~16.59% | — |
+| Phase | n_features | SGDFNet | Test sMAPE | Verdict |
+|-------|-----------|---------|-----------|---------|
+| DeepFinal-1 | 2 | fallback | 26.76% | NO-GO |
+| DeepFinal-2 | 36 | fallback | 26.69% | SMOKE_ONLY |
+| DeepFinal-3B (real SGDFNet) | **36** | **real** | **26.61%** | **NO-GO** |
+| Residual Baseline Lab | — | real | 26.69% (DA anchor) | NO_RESIDUAL_SIGNAL |
 
-## Verdict
+## Final Verdict
 
-```
-FORMAL_READY:          ❌ (sgdfnet_real_coverage=0%, fallback used)
-FALLBACK_READY:        ✅ (n_features=36, effective coverage ≥95%)
-DeepFinal-3 blocked:   YES — missing real SGDFNet predictions
+```text
+ENGINEERING_COMPLETE
+MODEL_NO_GO
+ARCHIVE_AS_MAIN_REALTIME_MODEL
+KEEP_UTILITIES_FOR_MAIN_SYSTEM
 ```
 
-## Progress
+## Key Metrics
 
-| Phase | n_features | sMAPE | Verdict | Blocker |
-|-------|-----------|-------|---------|---------|
-| DeepFinal-1 | 2 | 26.76% | NO-GO | Feature pipeline missing |
-| DeepFinal-2 (修正前) | 34 | 26.69% | FORMAL_READY (误判) | — |
-| DeepFinal-2 (修正后) | 36 | 26.69% (SMOKE_ONLY) | FALLBACK_READY | Real SGDFNet predictions |
-| DeepFinal-3 | 36+ | — | — | **缺少真实 SGDFNet 预测文件** |
+| Metric | DeepFinal-1 | DeepFinal-2 | DeepFinal-3B |
+|--------|-------------|-------------|-------------|
+| n_features | 2 | 36 | **36** |
+| Calendar features | ❌ | ✅ | ✅ |
+| Lag features | ❌ | ✅ | ✅ |
+| FULL_DAY leakage | — | ✅ fixed | ✅ fixed |
+| Feature verdict | — | FALLBACK_READY | **FALLBACK_READY** |
+| SGDFNet source | fallback | fallback | **real (Protocol B)** |
+| SGDFNet Feb coverage | 0% | 0% | **100%** |
+| Test sMAPE (TCN) | 26.76% | 26.69% | **26.61%** |
+| Residual pred std | — | — | **0.31** (true: 113.38) |
+| Corr(pred, DA anchor) | — | — | **0.9987** |
+| Best val sMAPE | 31.11% | 31.18% | 31.59% |
+| formal_metric | false | false | **false (SMOKE_ONLY)** |
+
+## Residual Baseline Lab (2026-02, real SGDFNet)
+
+| Rank | Model | Overall sMAPE |
+|------|-------|-------------|
+| 1 | DA_anchor | **26.69%** |
+| 2 | Mean_bias | 26.87% |
+| 3 | SGDFNet | 26.88% |
+| 4 | Period_bias | 26.95% |
+| 5 | Hour_bias | 27.47% |
+| 6 | HGB | 27.56% |
+| 7 | Ridge | 27.71% |
+| 8 | MLP | 28.27% |
+
+## Conclusion
+
+- **No residual signal exists** in FULL_DAY mode for 2026-02
+- ALL residual correction models perform **worse** than DA anchor
+- HGB (best ML model) = 27.56% vs DA anchor = 26.69%
+- TrendKnightRT current architecture **archived**
+- Feature engineering utilities **retained** for main system
 
 ## Files
 
-- Feature audit (fallback): `reports/local/deep_final/features_fallback/`
-- Feature hardening report: `docs/DEEPFINAL_3A_FEATURE_HARDENING_REPORT.md`
-- Training artifacts: `artifacts/trendknight_rt/exp_tcn_full_2026_02/`
-- SGDFNet prediction contract: `docs/SGDFNET_PREDICTION_INPUT_CONTRACT.md`
+- Archive decision: `docs/DEEP_REALTIME_MODEL_ARCHIVE_DECISION.md`
+- Failure diagnosis: `docs/DEEPFINAL_4_FAILURE_DIAGNOSIS_REPORT.md`
+- Residual baseline lab: `reports/local/deep_final/residual_baseline_lab_2026_02/`
+- Feature builder: `models/deep_sgdf_delta/realtime_feature_builder.py`
+- SGDFNet loader: `models/deep_sgdf_delta/sgdfnet_prediction_loader.py`

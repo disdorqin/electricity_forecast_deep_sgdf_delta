@@ -102,21 +102,6 @@ Residual signal exists:        NO
 建议：
 1. **归档 TrendKnightRT 当前架构** — 在 36 个特征 + 真实 SGDFNet 下无法学到 residual
 2. **不继续 residual-only deep** — 连 HGB 都比 DA anchor 差，residual signal 不存在
-3. **主系统直接使用 DA anchor 作为实时预测** — 这是最准确的 baseline (26.69%)
-
-## 6. 下一步建议
-
-```text
-1. 运行 residual baseline lab (scripts/run_residual_baseline_lab.py)
-   比较 HGB / Ridge / MLP / simple bias
-
-2. 如果 HGB residual overall < 23:
-   residual signal exists，考虑 lightweight residual model
-   替代 TrendKnightRT
-
-3. 如果 HGB residual < 20:
-   立刻把 HGB 作为 champion candidate
-
-4. 如果所有 baseline >= 25:
-   确认 residual signal 弱，归档深度模型部件
-```
+3. **DA anchor 是本实验最强 baseline** — 在 DeepFinal-4B 的 2026-02 isolated FULL_DAY realtime trend 实验中，DA anchor (26.69%) 胜过所有 residual correction 模型；但主系统是否使用 DA anchor，还需结合现有 SGDFNet corrected reference、尖峰/负价/产差/ledger 模块共同决定
+4. **保留 feature builder / SGDFNet loader / evaluation scripts** 供主系统使用
+5. **下一阶段转向产差、尖峰、负价、ledger fusion**

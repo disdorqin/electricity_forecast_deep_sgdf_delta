@@ -187,24 +187,43 @@ SGDFNet reference 约 16.59% 的 sMAPE 是使用完整 ~40 个特征 + 真实 SG
 
 ## 6. 是否达到目标
 
-| 目标 | 条件 | DeepFinal-1 | DeepFinal-2 (fallback) | DeepFinal-2 (预期真实SGDFNet) |
-|------|------|-------------|----------------------|---------------------------|
-| 最低 | n_features >= 25, coverage >= 95%, overall < 22 | ✗ (2 feat) | **✓ (34 feat, 99.9%)** | ✓ expected |
-| 合格 | overall < 20, 9_16 < 25, negative 不恶化 | ✗ | ✗ (26.69%) | ✓ likely |
-| 强 | Jan-May mean < 18, 9_16 接近 SGDFNet | ✗ | ✗ | ✗ requires real SGDFNet |
-| PASS | mean overall < 15 | ✗ | ✗ | ✗ requires real SGDFNet |
+| 目标 | 条件 | DeepFinal-1 | DeepFinal-2 | DeepFinal-3B (real SGDFNet) |
+|------|------|-------------|-------------|----------------------------|
+| 最低 | n_features >= 25, coverage >= 95%, overall < 22 | ✗ (2 feat) | ✓ (34 feat) | ✗ (26.61%) |
+| 合格 | overall < 20, 9_16 < 25 | ✗ | ✗ | ✗ (26.61%) |
+| 强 | Jan-May mean < 18 | ✗ | ✗ | ✗ |
+| PASS | mean overall < 15 | ✗ | ✗ | ✗ |
 
-**当前裁决（无真实 SGDFNet 预测时）：NO-GO**（overall 26.69% >= 20%）
-
-**预期裁决（引入真实 SGDFNet 预测后）：ACCEPTABLE ~ STRONG**（预期 overall 15-18%）
+**最终裁决：NO-GO** — 即使使用真实 SGDFNet 预测 + 36 个特征，整体 sMAPE 仍为 26.61%。
 
 ---
 
-## 7. 是否推荐后续主系统调用
+## 7. 归档决定
 
-**管线功能推荐集成，模型预测当前不推荐作为主力。**
+详见 `docs/DEEP_REALTIME_MODEL_ARCHIVE_DECISION.md`。
 
-Feature pipeline（34 features, FORMAL_READY）可以安全集成到主系统前置数据预处理流程。
+```text
+Final Verdict:
+  ENGINEERING_COMPLETE    — 管线完整
+  MODEL_NO_GO             — 模型未达到指标
+  ARCHIVE_AS_MAIN_REALTIME_MODEL  — 正式归档
+  KEEP_UTILITIES_FOR_MAIN_SYSTEM  — 工具保留
+```
+
+真实结果总结：
+- real SGDFNet + 36 features + 1462 train days → **26.61%** sMAPE
+- HGB residual baseline → **27.56%** sMAPE
+- best isolated baseline → **DA anchor 26.69%**
+- ALL residual correction models WORSE than DA anchor
+
+---
+
+## 8. 是否推荐后续主系统调用
+
+**管线推荐集成，模型不推荐调用。**
+
+Feature pipeline（36 features, FORMAL_READY quality）可以安全集成到主系统前置数据预处理。
+模型预测（26.61%）因 residual signal 不存在，不建议作为主力或候选模型。
 
 模型预测（26.69% sMAPE）因缺乏真实 SGDFNet 输入，指标未达到主力模型标准。建议在以下条件满足后再评估：
 
