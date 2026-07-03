@@ -208,13 +208,88 @@ def evaluate_fusion_scheme(
     }
 
 
+def _load_and_standardize_tk_predictions(path: Path) -> pd.DataFrame | None:
+    """Load TrendKnight predictions CSV and standardize columns.
+
+    Expected columns: business_day, hour_business (or hour), trend_pred (or rt_pred/y_pred).
+    Returns standardized DataFrame with columns: business_day, hour_business, trend_pred.
+    """
+    for enc in ("utf-8-sig", "gbk", "utf-8"):
+        try:
+            df = pd.read_csv(path, encoding=enc)
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    else:
+        return None
+
+    if df.empty:
+        return None
+
+    # Standardize column names
+    col_map = {}
+    # Hour column
+    for c in ["hour_business", "hour"]:
+        if c in df.columns:
+            col_map[c] = "hour_business"
+            break
+    # Prediction column
+    for c in ["trend_pred", "rt_pred", "y_pred", "prediction"]:
+        if c in df.columns:
+            col_map[c] = "trend_pred"
+            break
+
+    if "trend_pred" not in col_map.values():
+        logger.warning("No prediction column found in TK predictions")
+        return None
+
+    df = df.rename(columns=col_map)
+
+    # Ensure business_day is datetime
+    if "business_day" in df.columns:
+        df["business_day"] = pd.to_datetime(df["business_day"])
+
+    # Ensure hour_business is int
+    if "hour_business" in df.columns:
+        df["hour_business"] = df["hour_business"].astype(int)
+
+    keep = ["business_day", "hour_business", "trend_pred"]
+    keep = [c for c in keep if c in df.columns]
+    return df[keep].copy()
+
+
+def _write_skip_report(out_dir: Path, message: str):
+    """Write a skip report when fusion cannot be evaluated."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report = [
+        "# Simple Fusion Trial Report",
+        "",
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "",
+        f"**Status:** SKIPPED",
+        "",
+        f"**Reason:** {message}",
+        "",
+        "```",
+        "synthetic_tk_proxy=false",
+        "verdict=NO_DECISION",
+        "```",
+    ]
+    (out_dir / "fusion_gain_report.md").write_text("\n".join(report), encoding="utf-8")
+    logger.info("Skip report written to %s", out_dir / "fusion_gain_report.md")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Simple Fusion Trial")
     parser.add_argument("--start-date", type=str, required=True)
     parser.add_argument("--end-date", type=str, required=True)
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--source-repo-root", type=str, default=None)
-    parser.add_argument("--out-dir", type=str, default="reports/local/phase5/fusion_trial")
+    parser.add_argument("--out-dir", type=str, default="reports/local/phase6/fusion_trial")
+    parser.add_argument("--trendknight-predictions", type=str, default=None,
+                        help="Path to real TrendKnight predictions CSV (required for formal evaluation)")
+    parser.add_argument("--allow-synthetic-tk", action="store_true",
+                        help="Allow synthetic TK proxy (smoke test only, not for formal decision)")
     args = parser.parse_args()
 
     start_date = pd.Timestamp(args.start_date)
@@ -225,10 +300,12 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 60)
-    logger.info("Simple Fusion Trial — Phase 5 Task E")
+    logger.info("Simple Fusion Trial — Phase 6")
     logger.info("=" * 60)
     logger.info("  Period: %s to %s", start_date.date(), end_date.date())
     logger.info("  Output: %s", out_dir)
+    logger.info("  TK predictions: %s", args.trendknight_predictions or "NOT PROVIDED")
+    logger.info("  Allow synthetic TK: %s", args.allow_synthetic_tk)
 
     # Load data
     raw_df = load_raw_data(args.data_path)
@@ -245,7 +322,6 @@ def main():
     logger.info("SGDFNet predictions: %d rows", len(sgdf_df))
 
     # Align SGDFNet to ground truth
-    # Detect hour column name
     sgdf_hour_col = "hour_business" if "hour_business" in sgdf_df.columns else "hour"
     sgdf_aligned = gt_df.merge(
         sgdf_df[["business_day", sgdf_hour_col, "teacher_pred"]].rename(
@@ -259,11 +335,51 @@ def main():
         sys.exit(1)
     logger.info("Aligned SGDFNet: %d rows", len(sgdf_aligned))
 
-    # For TrendKnight, use SGDFNet + noise as proxy (since we don't have trained TK predictions)
-    # In a real scenario, this would be loaded from ablation output
-    np.random.seed(42)
-    noise = np.random.normal(0, 20, len(sgdf_aligned))  # synthetic TK prediction
-    tk_pred = sgdf_aligned["sgdf_pred"].values + noise
+    # Load TrendKnight predictions
+    tk_pred = None
+    synthetic_tk_proxy = False
+
+    if args.trendknight_predictions:
+        tk_path = Path(args.trendknight_predictions)
+        if tk_path.exists():
+            tk_df = _load_and_standardize_tk_predictions(tk_path)
+            if tk_df is not None and not tk_df.empty:
+                # Align TK to ground truth
+                tk_hour_col = "hour_business" if "hour_business" in tk_df.columns else "hour"
+                tk_aligned = sgdf_aligned.merge(
+                    tk_df[["business_day", tk_hour_col, "trend_pred"]].rename(
+                        columns={tk_hour_col: "hour"}
+                    ),
+                    on=["business_day", "hour"],
+                    how="inner",
+                )
+                if not tk_aligned.empty:
+                    tk_pred = tk_aligned["trend_pred"].values
+                    sgdf_pred = tk_aligned["sgdf_pred"].values
+                    periods = tk_aligned["period"].values
+                    buckets = tk_aligned["bucket"].values
+                    sgdf_aligned = tk_aligned
+                    logger.info("Real TrendKnight predictions: %d rows", len(tk_aligned))
+                else:
+                    logger.warning("TrendKnight predictions loaded but no overlap with SGDFNet+GT")
+            else:
+                logger.warning("Failed to load TrendKnight predictions from %s", tk_path)
+        else:
+            logger.warning("TrendKnight predictions file not found: %s", tk_path)
+
+    if tk_pred is None:
+        if args.allow_synthetic_tk:
+            logger.warning("Using synthetic TK proxy (SGDFNet + noise). SMOKE TEST ONLY.")
+            np.random.seed(42)
+            noise = np.random.normal(0, 20, len(sgdf_aligned))
+            tk_pred = sgdf_aligned["sgdf_pred"].values + noise
+            synthetic_tk_proxy = True
+        else:
+            # No real TK, no synthetic allowed → skip formal evaluation
+            skip_msg = "TrendKnight predictions unavailable; fusion not evaluated"
+            logger.warning(skip_msg)
+            _write_skip_report(out_dir, skip_msg)
+            return
 
     sgdf_pred = sgdf_aligned["sgdf_pred"].values
     periods = sgdf_aligned["period"].values
@@ -343,12 +459,35 @@ def main():
         "",
     ])
 
-    if gain >= 0.3:
+    if synthetic_tk_proxy:
+        report_lines.append("**SMOKE_ONLY_NOT_FOR_DECISION**: Using synthetic TK proxy. "
+                           "Real TrendKnight predictions required for formal evaluation.")
+        report_lines.append("")
+        report_lines.append("```")
+        report_lines.append("synthetic_tk_proxy=true")
+        report_lines.append("verdict=SMOKE_ONLY_NOT_FOR_DECISION")
+        report_lines.append("```")
+    elif gain >= 0.3:
         report_lines.append(f"**GO**: Best fusion ({best_result['name']}) improves sMAPE by {gain:.4f} >= 0.3. Enter main fusion pipeline.")
+        report_lines.append("")
+        report_lines.append("```")
+        report_lines.append("synthetic_tk_proxy=false")
+        report_lines.append("verdict=GO")
+        report_lines.append("```")
     elif gain >= 0.05:
-        report_lines.append(f"**CONDITIONAL**: Best fusion ({best_result['name']}) improves sMAPE by {gain:.4f} (0.05~0.3). Use as low-weight diversity model only.")
+        report_lines.append(f"**LOW-WEIGHT DIVERSITY**: Best fusion ({best_result['name']}) improves sMAPE by {gain:.4f} (0.05~0.3). Use as low-weight diversity model only.")
+        report_lines.append("")
+        report_lines.append("```")
+        report_lines.append("synthetic_tk_proxy=false")
+        report_lines.append("verdict=LOW-WEIGHT DIVERSITY ONLY")
+        report_lines.append("```")
     else:
         report_lines.append(f"**NO-GO**: Best fusion ({best_result['name']}) improves sMAPE by {gain:.4f} < 0.05. Do not integrate. Fall back to SGDFNet + spike/negative modules.")
+        report_lines.append("")
+        report_lines.append("```")
+        report_lines.append("synthetic_tk_proxy=false")
+        report_lines.append("verdict=NO-GO")
+        report_lines.append("```")
 
     report_path = out_dir / "fusion_gain_report.md"
     report_path.write_text("\n".join(report_lines), encoding="utf-8")

@@ -166,25 +166,64 @@ class TestEvaluateRT916LocalQuality:
         """No RT916 data → recommend disable."""
         tp = np.full((1, 3, 24), np.nan, dtype=np.float32)
         tm = np.zeros((1, 3), dtype=np.float32)
-        delta = np.zeros((1, 24))
+        rt_actual = np.zeros((1, 24))
 
         result = evaluate_rt916_local_quality(
             tp, tm, ["sgdfnet", "rt916", "timemixer"],
-            rt916_idx=1, delta_true=delta,
+            rt916_idx=1, rt_actual=rt_actual,
         )
         assert result["recommendation"] == "disable"
 
-    def test_with_rt916_data(self):
-        """With RT916 data → returns quality metrics."""
-        tp = np.ones((1, 3, 24), dtype=np.float32) * 5.0
+    def test_with_rt916_delta_data(self):
+        """With RT916 delta data → returns quality metrics in RT price space."""
+        tp = np.ones((1, 3, 24), dtype=np.float32) * 5.0  # delta predictions
         tm = np.ones((1, 3), dtype=np.float32)
-        delta = np.ones((1, 24), dtype=np.float32) * 3.0
+        rt_actual = np.ones((1, 24), dtype=np.float32) * 105.0  # rt prices
+        da_anchor = np.ones((1, 24), dtype=np.float32) * 100.0  # da anchors
 
         result = evaluate_rt916_local_quality(
             tp, tm, ["sgdfnet", "rt916", "timemixer"],
-            rt916_idx=1, delta_true=delta,
+            rt916_idx=1, rt_actual=rt_actual, da_anchor=da_anchor,
+            teacher_pred_kind="delta",
             sgdfnet_pred=tp[:, 0:1, :].squeeze(1),
             sgdfnet_idx=0,
         )
         assert "rt916_local_smape" in result
+        assert result["teacher_pred_kind"] == "delta"
         assert "recommendation" in result
+
+    def test_with_rt916_rt_data(self):
+        """With RT916 RT price data → compare directly."""
+        tp = np.ones((1, 3, 24), dtype=np.float32) * 105.0  # RT price predictions
+        tm = np.ones((1, 3), dtype=np.float32)
+        rt_actual = np.ones((1, 24), dtype=np.float32) * 100.0
+
+        result = evaluate_rt916_local_quality(
+            tp, tm, ["sgdfnet", "rt916", "timemixer"],
+            rt916_idx=1, rt_actual=rt_actual,
+            teacher_pred_kind="rt",
+        )
+        assert "rt916_local_smape" in result
+        assert result["teacher_pred_kind"] == "rt"
+        # RT916 pred=105 vs actual=100, should have low sMAPE
+        assert result["rt916_local_smape"] < 20.0
+
+    def test_rt916_worse_than_sgdfnet(self):
+        """RT916 much worse than SGDFNet → recommendation=disable."""
+        tp = np.ones((1, 3, 24), dtype=np.float32)
+        tp[:, 1, :] = 500.0  # RT916 predicts 500 (way off)
+        tp[:, 0, :] = 5.0    # SGDFNet delta=5
+        tm = np.ones((1, 3), dtype=np.float32)
+        rt_actual = np.ones((1, 24), dtype=np.float32) * 100.0
+        da_anchor = np.ones((1, 24), dtype=np.float32) * 95.0  # SGDFNet rt=100
+
+        result = evaluate_rt916_local_quality(
+            tp, tm, ["sgdfnet", "rt916", "timemixer"],
+            rt916_idx=1, rt_actual=rt_actual, da_anchor=da_anchor,
+            teacher_pred_kind="rt",
+            sgdfnet_pred=tp[:, 0:1, :].squeeze(1),
+            sgdfnet_idx=0,
+        )
+        # RT916 predicts 500 vs actual 100 → very high sMAPE
+        # SGDFNet predicts 100 vs actual 100 → perfect
+        assert result["recommendation"] == "disable"

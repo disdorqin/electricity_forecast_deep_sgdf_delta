@@ -215,14 +215,27 @@ def evaluate_rt916_local_quality(
     teacher_mask: np.ndarray,
     teacher_names: list[str],
     rt916_idx: int,
-    delta_true: np.ndarray,
+    rt_actual: np.ndarray,
+    da_anchor: np.ndarray | None = None,
+    teacher_pred_kind: str = "delta",
     sgdfnet_pred: np.ndarray | None = None,
     sgdfnet_idx: int = 0,
 ) -> dict:
     """Evaluate RT916 quality on its allowed hours only.
 
+    Args:
+        teacher_pred: [num_days, num_teachers, 24] teacher predictions
+        teacher_mask: [num_days, num_teachers] teacher availability
+        teacher_names: list of teacher names
+        rt916_idx: index of RT916 in teacher arrays
+        rt_actual: [num_days, 24] actual realtime prices
+        da_anchor: [num_days, 24] day-ahead anchor prices (required if teacher_pred_kind="delta")
+        teacher_pred_kind: "rt" if teacher_pred is RT price, "delta" if teacher_pred is delta
+        sgdfnet_pred: [num_days, 24] SGDFNet delta predictions (for comparison)
+        sgdfnet_idx: index of SGDFNet in teacher arrays
+
     Returns dict with:
-      - rt916_local_smape: sMAPE on allowed hours
+      - rt916_local_smape: sMAPE_floor50 on allowed hours (RT price space)
       - sgdfnet_local_smape: SGDFNet sMAPE on same hours
       - rt916_is_better: bool
       - recommendation: "keep" | "disable"
@@ -235,22 +248,37 @@ def evaluate_rt916_local_quality(
     if rt916_finite.sum() == 0:
         return {"rt916_local_smape": float("inf"), "recommendation": "disable"}
 
-    # RT916 sMAPE on its allowed hours
+    # Extract RT916 predictions and convert to RT price space
     rt916_pred_vals = teacher_pred[:, rt916_idx, :][rt916_finite]
-    delta_true_vals = delta_true[rt916_finite]
+    rt_actual_vals = rt_actual[rt916_finite]
 
-    # sMAPE floor 50
+    if teacher_pred_kind == "rt":
+        # Teacher predictions are already RT prices
+        rt916_rt_pred = rt916_pred_vals
+    elif teacher_pred_kind == "delta":
+        # Teacher predictions are delta; convert to RT price
+        if da_anchor is None:
+            logger.warning("da_anchor required for teacher_pred_kind='delta', using zeros")
+            da_anchor_vals = np.zeros_like(rt916_pred_vals)
+        else:
+            da_anchor_vals = da_anchor[rt916_finite]
+        rt916_rt_pred = da_anchor_vals + rt916_pred_vals
+    else:
+        raise ValueError(f"teacher_pred_kind must be 'rt' or 'delta', got '{teacher_pred_kind}'")
+
+    # Compute sMAPE_floor50 in RT price space
     floor = 50.0
-    rt916_pred_clipped = np.clip(rt916_pred_vals + 100, floor, None)  # rough rt pred
-    delta_true_clipped = np.clip(np.abs(delta_true_vals), floor, None)
-    rt916_smape = np.mean(
-        200.0 * np.abs(rt916_pred_clipped - delta_true_clipped)
-        / (np.abs(rt916_pred_clipped) + np.abs(delta_true_clipped) + 1e-6)
-    )
+    rt916_rt_clipped = np.clip(np.abs(rt916_rt_pred), floor, None)
+    rt_actual_clipped = np.clip(np.abs(rt_actual_vals), floor, None)
+    rt916_smape = float(np.mean(
+        200.0 * np.abs(rt916_rt_clipped - rt_actual_clipped)
+        / (np.abs(rt916_rt_clipped) + np.abs(rt_actual_clipped) + 1e-6)
+    ))
 
     result = {
-        "rt916_local_smape": float(rt916_smape),
+        "rt916_local_smape": rt916_smape,
         "rt916_allowed_hours": int(rt916_finite.sum()),
+        "teacher_pred_kind": teacher_pred_kind,
         "recommendation": "keep",
     }
 
@@ -259,15 +287,23 @@ def evaluate_rt916_local_quality(
         sgdfnet_finite = np.isfinite(teacher_pred[:, sgdfnet_idx, :])
         both_finite = rt916_finite & sgdfnet_finite
         if both_finite.sum() > 0:
-            sgd_vals = teacher_pred[:, sgdfnet_idx, :][both_finite]
-            dt_vals = delta_true[both_finite]
-            sgd_clipped = np.clip(sgd_vals + 100, floor, None)
-            dt_clipped = np.clip(np.abs(dt_vals), floor, None)
-            sgdfnet_smape = np.mean(
-                200.0 * np.abs(sgd_clipped - dt_clipped)
-                / (np.abs(sgd_clipped) + np.abs(dt_clipped) + 1e-6)
-            )
-            result["sgdfnet_local_smape"] = float(sgdfnet_smape)
+            sgd_delta_vals = teacher_pred[:, sgdfnet_idx, :][both_finite]
+            rt_actual_both = rt_actual[both_finite]
+
+            # Convert SGDFNet delta to RT price
+            if da_anchor is not None:
+                da_anchor_both = da_anchor[both_finite]
+                sgd_rt_pred = da_anchor_both + sgd_delta_vals
+            else:
+                sgd_rt_pred = sgd_delta_vals  # fallback
+
+            sgd_rt_clipped = np.clip(np.abs(sgd_rt_pred), floor, None)
+            rt_actual_both_clipped = np.clip(np.abs(rt_actual_both), floor, None)
+            sgdfnet_smape = float(np.mean(
+                200.0 * np.abs(sgd_rt_clipped - rt_actual_both_clipped)
+                / (np.abs(sgd_rt_clipped) + np.abs(rt_actual_both_clipped) + 1e-6)
+            ))
+            result["sgdfnet_local_smape"] = sgdfnet_smape
             result["rt916_is_better"] = rt916_smape < sgdfnet_smape
 
             if rt916_smape > sgdfnet_smape * 1.2:  # 20% worse
