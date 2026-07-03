@@ -1,7 +1,7 @@
 # DeepFinal-4: Failure Diagnosis Report
 
 **Date:** 2026-07-03
-**Status:** COMPLETE — NO_DEEP_SIGNAL
+**Status:** COMPLETE — NO_RESIDUAL_SIGNAL — RECOMMEND ARCHIVE
 
 ---
 
@@ -62,22 +62,47 @@ NO_BETTER_THAN_ANCHOR ✅ — 26.61% vs 26.69% (仅好 0.08pp)
 
 从 epoch 1 开始 val sMAPE 就持续变差，说明模型没有学到任何有效模式。
 
-## 5. 最终结论
+## 5. Residual Baseline Lab 结果
+
+**脚本：** `scripts/run_residual_baseline_lab.py`
+**数据：** 2026-02，35088 train rows / 672 test rows
+
+| 排名 | 模型 | Overall | 1_8 | 9_16 | 17_24 |
+|------|------|---------|-----|------|-------|
+| 1 | **DA_anchor** | **26.69%** | 26.39% | 28.72% | 25.09% |
+| 2 | Mean_bias | 26.87% | — | — | — |
+| 3 | SGDFNet | 26.88% | 26.42% | 29.11% | 25.23% |
+| 4 | Period_bias | 26.95% | — | — | — |
+| 5 | Hour_bias | 27.47% | — | — | — |
+| 6 | HGB | 27.56% | — | — | — |
+| 7 | Ridge | 27.71% | — | — | — |
+| 8 | MLP | 28.27% | — | — | — |
+
+**Verdict: NO_RESIDUAL_SIGNAL**
+
+- 最好的模型是 DA anchor (26.69%)
+- 没有任何 residual 模型超过 DA anchor
+- HGB (27.56%) 比 SGDFNet (26.88%) 更差
+- MLP (28.27%) 最差
+
+## 6. 最终结论
 
 ```text
-TrendKnightRT 在当前配置下不值得继续优化。
-
-原因：
-1. 残差信号不存在 — residual_pred_std 仅为 true residual 的 0.27%
-2. SGDFNet rt_hat 与 da_anchor 高度相关，模型无法从中提取新信息
-3. 训练从 epoch 1 就无进展，不是超参问题
-4. 36 个特征 + 真实 SGDFNet 仍只能达到 26.61%
+residual_baselines.py bug:     已修复 (baseline_hour_bias, baseline_period_bias)
+run_residual_baseline_lab.py:  已完成并运行
+Residual baseline leaderboard: DA_anchor (26.69%) 最高
+HGB residual overall:          27.56% (比 DA anchor 差 0.87pp)
+HGB < 23:                      NO (27.56%)
+HGB < 20:                      NO (27.56%)
+Residual signal exists:        NO
+继续 residual-only deep:       NO — 标记为 DEFERRED_UNTIL_HGB_SIGNAL (永不触发)
+趋势：                        ARCHIVE_DEEP_MODEL
+```
 
 建议：
-├── USE_HGB_RESIDUAL     — 轻量模型可能足够
-├── CONTINUE_DEEP_RESIDUAL — 仅在 HGB < 20% 时考虑
-└── ARCHIVE_DEEP_MODEL   — 如果 HGB 也无法改善
-```
+1. **归档 TrendKnightRT 当前架构** — 在 36 个特征 + 真实 SGDFNet 下无法学到 residual
+2. **不继续 residual-only deep** — 连 HGB 都比 DA anchor 差，residual signal 不存在
+3. **主系统直接使用 DA anchor 作为实时预测** — 这是最准确的 baseline (26.69%)
 
 ## 6. 下一步建议
 

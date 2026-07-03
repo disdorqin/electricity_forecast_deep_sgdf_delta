@@ -40,28 +40,49 @@ def baseline_mean_bias(df: pd.DataFrame, residual_mean: float | None = None) -> 
 
 def baseline_hour_bias(df: pd.DataFrame,
                        hour_bias_map: dict[int, float] | None = None) -> np.ndarray:
-    """Baseline 4: rt_pred = sgdfnet_pred + hour-wise residual bias"""
+    """Baseline 4: rt_pred = sgdfnet_pred + hour-wise residual bias
+
+    Usage (train → test)::
+
+        # Compute bias on train set
+        train_resid = train["rt_actual"] - train["sgdfnet_pred"]
+        bias_map = train.groupby("hour_business")[train_resid].mean().to_dict()
+
+        # Apply to test set
+        preds = baseline_hour_bias(test_df, hour_bias_map=bias_map)
+    """
     if hour_bias_map is not None:
         bias = df["hour_business"].map(hour_bias_map).fillna(0).values
     else:
-        resid = df["rt_actual"] - df["sgdfnet_pred"]
-        bias_map = df.groupby("hour_business")[resid.name if hasattr(resid, 'name') else 'resid'].mean().to_dict() if hasattr(resid, 'name') else {}
-        bias = df["hour_business"].map(bias_map).fillna(0).values
+        # Compute bias from this DataFrame (only use when this IS the train set)
+        tmp = df.copy()
+        tmp["_resid"] = tmp["rt_actual"] - tmp["sgdfnet_pred"]
+        bias_map = tmp.groupby("hour_business")["_resid"].mean().to_dict()
+        bias = tmp["hour_business"].map(bias_map).fillna(0).values
     return df["sgdfnet_pred"].values + bias
 
 
 def baseline_period_bias(df: pd.DataFrame,
                          period_bias_map: dict[str, float] | None = None) -> np.ndarray:
-    """Baseline 5: rt_pred = sgdfnet_pred + period-wise residual bias"""
+    """Baseline 5: rt_pred = sgdfnet_pred + period-wise residual bias
+
+    Usage (train → test)::
+
+        train_resid = train["rt_actual"] - train["sgdfnet_pred"]
+        bias_map = train.groupby(train["hour_business"].apply(get_period))[train_resid].mean().to_dict()
+        preds = baseline_period_bias(test_df, period_bias_map=bias_map)
+    """
     from models.deep_sgdf_delta.realtime_feature_contract import get_period
     if period_bias_map is not None:
         periods = df["hour_business"].apply(get_period)
         bias = periods.map(period_bias_map).fillna(0).values
     else:
-        resid = df["rt_actual"] - df["sgdfnet_pred"]
-        df["_period"] = df["hour_business"].apply(get_period)
-        bias_map = df.groupby("_period")["resid"].mean().to_dict()
-        periods = df["_period"]
+        # Compute bias from this DataFrame (only use when this IS the train set)
+        tmp = df.copy()
+        tmp["_resid"] = tmp["rt_actual"] - tmp["sgdfnet_pred"]
+        tmp["_period"] = tmp["hour_business"].apply(get_period)
+        bias_map = tmp.groupby("_period")["_resid"].mean().to_dict()
+        periods = tmp["_period"]
         bias = periods.map(bias_map).fillna(0).values
     return df["sgdfnet_pred"].values + bias
 
