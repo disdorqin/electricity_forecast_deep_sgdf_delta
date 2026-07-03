@@ -963,7 +963,8 @@ def run_training(
         "feature_mode": args.feature_mode,
         "n_features": input_dim,
         "sgdfnet_fallback_used": is_fallback_run,
-        "sgdfnet_coverage": manifest.get("sgdfnet_coverage", 0.0),
+        "sgdfnet_effective_coverage": manifest.get("sgdfnet_coverage", 0.0),
+        "sgdfnet_real_coverage": (feature_info or {}).get("sgdfnet_real_coverage", 0.0),
         "feature_verdict": (feature_info or {}).get("verdict", "unknown"),
         "required_present": (feature_info or {}).get("required_present", []),
         "required_missing": (feature_info or {}).get("required_missing", []),
@@ -1136,8 +1137,9 @@ def main() -> None:
         feature_info["feature_mode"] = "full"
 
         logger.info(
-            "Feature audit: n_features=%d, verdict=%s, sgdfnet_coverage=%.1f%%",
-            audit["n_features"], audit["verdict"], audit["sgdfnet_coverage"],
+            "Feature audit: n_features=%d, verdict=%s, sgdfnet_effective_coverage=%.1f%%",
+            audit["n_features"], audit["verdict"],
+            audit.get("sgdfnet_effective_coverage", audit.get("sgdfnet_coverage", 0.0)),
         )
 
         if audit["required_missing"]:
