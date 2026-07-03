@@ -97,15 +97,9 @@ def build_ground_truth(raw_df: pd.DataFrame, start: pd.Timestamp, end: pd.Timest
     result["da_price"] = df[da_col].astype(float)
     result["rt_price"] = df[rt_col].astype(float)
 
-    # Business day alignment: 00:00 of calendar day D → business_day D-1, hour=24
-    result["business_day"] = result["ds"].dt.normalize() - pd.Timedelta(days=1)
-    result["hour"] = result["ds"].dt.hour
-    result.loc[result["hour"] == 0, "hour"] = 24
-    result.loc[result["hour"] == 0, "business_day"] = result.loc[result["hour"] == 0, "ds"].dt.normalize()
-
-    # Period
-    h = result["hour"].astype(int)
-    result["period"] = pd.cut(h, bins=[0, 8, 16, 24], labels=["1_8", "9_16", "17_24"], include_lowest=True).astype(str)
+    # Business day alignment using unified module
+    from models.deep_sgdf_delta.business_time import add_business_time_columns
+    result = add_business_time_columns(result, timestamp_col="ds", hour_col="hour")
 
     # Bucket
     result["bucket"] = "normal"

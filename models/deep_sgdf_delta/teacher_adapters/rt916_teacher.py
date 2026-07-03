@@ -113,18 +113,16 @@ def _standardize(df: pd.DataFrame, start_date: Optional[str], end_date: Optional
     result["teacher_available"] = True
     result["teacher_source"] = "rt916_output"
     
-    # Ensure business_day / hour
-    if "business_day" not in result.columns:
+    # Ensure business_day / hour using unified module
+    if "business_day" not in result.columns or "hour_business" not in result.columns:
+        from models.deep_sgdf_delta.business_time import add_business_time_columns
+        ts_col = None
         for c in ("ds", "timestamp", "时刻"):
             if c in result.columns:
-                ts = pd.to_datetime(result[c])
-                result["business_day"] = ts.dt.normalize()
-                h = ts.dt.hour
-                mask = h == 0
-                result["hour_business"] = h
-                result.loc[mask, "hour_business"] = 24
-                result.loc[mask, "business_day"] = result.loc[mask, "business_day"] - pd.Timedelta(days=1)
+                ts_col = c
                 break
+        if ts_col:
+            result = add_business_time_columns(result, timestamp_col=ts_col)
     
     if "hour_business" not in result.columns:
         for c in ("hour", "target_hour", "hour_business"):
@@ -132,8 +130,9 @@ def _standardize(df: pd.DataFrame, start_date: Optional[str], end_date: Optional
                 result["hour_business"] = result[c]
                 break
     
-    h = result["hour_business"].astype(int)
-    result["period"] = pd.cut(h, bins=[0, 8, 16, 24], labels=["1_8", "9_16", "17_24"], include_lowest=True).astype(str)
+    if "period" not in result.columns and "hour_business" in result.columns:
+        from models.deep_sgdf_delta.business_time import compute_period
+        result["period"] = result["hour_business"].astype(int).apply(compute_period)
     
     # Date filter
     if start_date and "business_day" in result.columns:

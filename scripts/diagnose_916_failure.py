@@ -133,15 +133,9 @@ def main():
     df["da_price"] = df[da_col].astype(float)
     df["rt_price"] = df[rt_col].astype(float)
 
-    # Business day alignment
-    df["business_day"] = df["ds"].dt.normalize() - pd.Timedelta(days=1)
-    df["hour"] = df["ds"].dt.hour
-    df.loc[df["hour"] == 0, "hour"] = 24
-    df.loc[df["hour"] == 0, "business_day"] = df.loc[df["hour"] == 0, "ds"].dt.normalize()
-
-    # Period
-    h = df["hour"].astype(int)
-    df["period"] = pd.cut(h, bins=[0, 8, 16, 24], labels=["1_8", "9_16", "17_24"], include_lowest=True).astype(str)
+    # Business day alignment using unified module
+    from models.deep_sgdf_delta.business_time import add_business_time_columns
+    df = add_business_time_columns(df, timestamp_col="ds", hour_col="hour")
 
     # Bucket
     df["bucket"] = "normal"
