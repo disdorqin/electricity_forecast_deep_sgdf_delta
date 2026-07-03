@@ -18,13 +18,27 @@ Verdict:
   WARN — differs <= 1.0 pp
   FAIL — differs > 1.0 pp
 
+Multi-month mode (--months):
+  When --months is provided (comma-separated YYYY-MM), loops over each month,
+  computes DA anchor sMAPE from the raw data for each month, and outputs:
+    - metric_alignment_monthly.csv (one row per month)
+    - metric_alignment_summary.json (overall verdict + per-month details)
+    - metric_alignment_report.md
+
 Output (to --out-dir, default reports/local/risk_modules/metric_alignment/):
   metric_alignment_summary.json
-  metric_alignment_rows.csv
+  metric_alignment_rows.csv  (single-month mode)
+  metric_alignment_monthly.csv  (multi-month mode)
   metric_alignment_report.md
 
 Usage:
+    # Single-month mode (backward compatible)
     python scripts/audit_metric_alignment.py \\
+        --out-dir reports/local/risk_modules/metric_alignment
+
+    # Multi-month mode
+    python scripts/audit_metric_alignment.py \\
+        --months 2026-01,2026-02,2026-03 \\
         --out-dir reports/local/risk_modules/metric_alignment
 """
 from __future__ import annotations
@@ -46,6 +60,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from models.deep_sgdf_delta.metrics import smape_floor50
 from models.deep_sgdf_delta.realtime_column_mapping import rename_chinese_columns
+from models.deep_sgdf_delta.business_time import add_business_time_columns
 
 logging.basicConfig(
     level=logging.INFO,
@@ -300,7 +315,349 @@ def compute_verdict(common_smape_values: list[float]) -> tuple[str, float]:
     return verdict, spread_pp
 
 
-# ── Report generation ────────────────────────────────────────────────
+def compute_multi_month_verdict(monthly_verdicts: list[str]) -> str:
+    """Compute overall verdict from per-month verdicts.
+
+    Rules:
+      - If any month is FAIL → overall FAIL
+      - If any month is WARN (and none FAIL) → overall WARN
+      - If all PASS → overall PASS
+      - If no months have verdict → INSUFFICIENT
+    """
+    if not monthly_verdicts:
+        return "INSUFFICIENT"
+    if "FAIL" in monthly_verdicts:
+        return "FAIL"
+    if "WARN" in monthly_verdicts:
+        return "WARN"
+    if all(v == "PASS" for v in monthly_verdicts):
+        return "PASS"
+    return "INSUFFICIENT"
+
+
+# ── Multi-month audit ────────────────────────────────────────────────
+
+def _filter_raw_for_month(raw_df: pd.DataFrame, month_str: str) -> pd.DataFrame:
+    """Filter raw DataFrame to rows belonging to a given YYYY-MM month.
+
+    Uses the ds column (timestamp). The month is determined by the calendar
+    month of the ds timestamp.
+    """
+    df = raw_df.copy()
+    df["ds"] = pd.to_datetime(df["ds"], errors="coerce")
+    df = df.dropna(subset=["ds"])
+    month_series = df["ds"].dt.to_period("M").astype(str)
+    filtered = df[month_series == month_str].copy()
+    return filtered
+
+
+def _compute_monthly_da_anchor_smape(month_df: pd.DataFrame) -> float | None:
+    """Compute DA anchor sMAPE_floor50 for a single month's raw data.
+
+    Uses rt_actual vs da_anchor (the DA anchor is the baseline prediction).
+    Returns None if required columns are missing or no valid rows.
+    """
+    if "rt_actual" not in month_df.columns or "da_anchor" not in month_df.columns:
+        logger.warning("Missing rt_actual or da_anchor columns for monthly sMAPE")
+        return None
+    valid = month_df.dropna(subset=["rt_actual", "da_anchor"])
+    if valid.empty:
+        return None
+    yt = valid["rt_actual"].to_numpy(dtype=float)
+    yp = valid["da_anchor"].to_numpy(dtype=float)
+    return round(smape_floor50(yt, yp), 4)
+
+
+def _compute_monthly_row_details(month_df: pd.DataFrame, month_str: str) -> dict:
+    """Compute detailed row-level statistics for a single month.
+
+    Returns a dict with:
+      - month: the YYYY-MM string
+      - row_count: number of rows
+      - da_anchor_smape_fraction: sMAPE as fraction (0-2 scale)
+      - da_anchor_smape_percent: sMAPE as percent (0-200 scale)
+      - business_day_range: (min_bd, max_bd) tuple
+      - hour_distribution: dict of hour -> count
+      - missing_rows: number of expected hours minus actual rows
+      - duplicate_rows: number of duplicate ds timestamps
+    """
+    row_count = len(month_df)
+
+    # DA anchor sMAPE
+    da_smape_percent = _compute_monthly_da_anchor_smape(month_df)
+    # Fraction scale: percent / 100
+    da_smape_fraction = round(da_smape_percent / 100.0, 6) if da_smape_percent is not None else None
+
+    # Business day range
+    if "business_day" in month_df.columns:
+        bd = month_df["business_day"].dropna()
+        if len(bd) > 0:
+            bd_min = str(bd.min())[:10]
+            bd_max = str(bd.max())[:10]
+            business_day_range = f"{bd_min}~{bd_max}"
+        else:
+            business_day_range = "N/A"
+    elif "ds" in month_df.columns:
+        # Compute business_day on the fly
+        df_bt = add_business_time_columns(month_df, timestamp_col="ds")
+        bd = df_bt["business_day"].dropna()
+        if len(bd) > 0:
+            bd_min = str(bd.min())[:10]
+            bd_max = str(bd.max())[:10]
+            business_day_range = f"{bd_min}~{bd_max}"
+        else:
+            business_day_range = "N/A"
+    else:
+        business_day_range = "N/A"
+
+    # Hour distribution
+    if "hour_business" in month_df.columns:
+        hour_dist_series = month_df["hour_business"].dropna().astype(int)
+    elif "ds" in month_df.columns:
+        df_bt = add_business_time_columns(month_df, timestamp_col="ds")
+        hour_dist_series = df_bt["hour_business"].dropna().astype(int)
+    else:
+        hour_dist_series = pd.Series([], dtype=int)
+
+    if len(hour_dist_series) > 0:
+        hour_counts = hour_dist_series.value_counts().sort_index()
+        hour_distribution = {str(int(h)): int(c) for h, c in hour_counts.items()}
+    else:
+        hour_distribution = {}
+
+    # Missing rows: expected = number of unique business days * 24 hours
+    if "ds" in month_df.columns:
+        df_bt = add_business_time_columns(month_df, timestamp_col="ds")
+        unique_bd = df_bt["business_day"].nunique()
+        expected_rows = unique_bd * 24
+        missing_rows = max(0, expected_rows - row_count)
+    else:
+        missing_rows = 0
+
+    # Duplicate rows
+    if "ds" in month_df.columns:
+        ds_parsed = pd.to_datetime(month_df["ds"], errors="coerce").dropna()
+        duplicate_rows = int(ds_parsed.duplicated().sum())
+    else:
+        duplicate_rows = 0
+
+    return {
+        "month": month_str,
+        "row_count": row_count,
+        "da_anchor_smape_fraction": da_smape_fraction,
+        "da_anchor_smape_percent": da_smape_percent,
+        "business_day_range": business_day_range,
+        "hour_distribution": str(hour_distribution),
+        "missing_rows": missing_rows,
+        "duplicate_rows": duplicate_rows,
+    }
+
+
+def run_multi_month_audit(
+    raw_df: pd.DataFrame,
+    months: list[str],
+    out_dir: Path,
+) -> None:
+    """Run multi-month metric alignment audit.
+
+    For each month:
+      1. Filter raw data for the month
+      2. Add business time columns
+      3. Compute DA anchor sMAPE
+      4. Collect row-level details
+
+    Outputs:
+      - metric_alignment_monthly.csv
+      - metric_alignment_summary.json
+      - metric_alignment_report.md
+    """
+    logger.info("=" * 60)
+    logger.info("Multi-Month Metric Alignment Audit")
+    logger.info("Months: %s", months)
+    logger.info("=" * 60)
+
+    monthly_rows: list[dict] = []
+    monthly_details: list[dict] = []
+    monthly_verdicts: list[str] = []
+
+    for month_str in months:
+        logger.info("Processing month: %s", month_str)
+        month_df = _filter_raw_for_month(raw_df, month_str)
+
+        if month_df.empty:
+            logger.warning("No data found for month %s", month_str)
+            monthly_details.append({
+                "month": month_str,
+                "row_count": 0,
+                "da_anchor_smape_fraction": None,
+                "da_anchor_smape_percent": None,
+                "business_day_range": "N/A",
+                "hour_distribution": "{}",
+                "missing_rows": 0,
+                "duplicate_rows": 0,
+                "verdict": "NO_DATA",
+            })
+            monthly_verdicts.append("NO_DATA")
+            continue
+
+        # Add business time columns
+        month_df = add_business_time_columns(month_df, timestamp_col="ds")
+
+        # Compute DA anchor sMAPE
+        da_smape = _compute_monthly_da_anchor_smape(month_df)
+        logger.info("  %s: rows=%d, da_anchor_sMAPE=%.4f", month_str, len(month_df), da_smape if da_smape is not None else float("nan"))
+
+        # Compute detailed row info
+        detail = _compute_monthly_row_details(month_df, month_str)
+
+        # Per-month verdict: based on data integrity checks
+        # PASS if row_count correct, no missing/duplicate rows
+        # WARN if minor issues (e.g. missing rows explained by DST/leap)
+        # FAIL if major integrity issues
+        if da_smape is not None:
+            expected_rows = len(month_df)
+            n_missing = detail.get("missing_rows", 0)
+            n_dup = detail.get("duplicate_rows", 0)
+            if n_dup > 0:
+                verdict = "FAIL"
+            elif n_missing > 48:
+                verdict = "FAIL"
+            elif n_missing > 0:
+                verdict = "WARN"
+            else:
+                verdict = "PASS"
+        else:
+            verdict = "INSUFFICIENT"
+
+        detail["verdict"] = verdict
+        monthly_details.append(detail)
+        monthly_verdicts.append(verdict)
+
+        monthly_rows.append({
+            "month": month_str,
+            "row_count": detail["row_count"],
+            "da_anchor_smape_fraction": detail["da_anchor_smape_fraction"],
+            "da_anchor_smape_percent": detail["da_anchor_smape_percent"],
+            "business_day_range": detail["business_day_range"],
+            "hour_distribution": detail["hour_distribution"],
+            "missing_rows": detail["missing_rows"],
+            "duplicate_rows": detail["duplicate_rows"],
+        })
+
+    # Overall verdict
+    overall_verdict = compute_multi_month_verdict(monthly_verdicts)
+    logger.info("Overall verdict: %s", overall_verdict)
+
+    # ── Write outputs ────────────────────────────────────────────────
+
+    # 1. Monthly CSV
+    monthly_df = pd.DataFrame(monthly_rows)
+    csv_path = out_dir / "metric_alignment_monthly.csv"
+    monthly_df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+    logger.info("Wrote %s", csv_path)
+
+    # 2. JSON summary
+    summary = {
+        "audit_timestamp": datetime.now().isoformat(),
+        "audit_mode": "multi_month",
+        "canonical_formula": "models.deep_sgdf_delta.metrics.smape_floor50",
+        "multiplier": 200,
+        "floor": 50.0,
+        "months_audited": months,
+        "per_month_details": monthly_details,
+        "overall_verdict": overall_verdict,
+        "verdict_rules": {
+            "per_month": "PASS if no missing/dup rows, WARN if <=48 missing, FAIL if >48 missing or duplicates",
+            "overall": "FAIL if any month FAIL, WARN if any WARN, else PASS",
+        },
+    }
+    json_path = out_dir / "metric_alignment_summary.json"
+    json_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    logger.info("Wrote %s", json_path)
+
+    # 3. Markdown report
+    report_md = _generate_multi_month_report(monthly_details, overall_verdict, months)
+    md_path = out_dir / "metric_alignment_report.md"
+    md_path.write_text(report_md, encoding="utf-8")
+    logger.info("Wrote %s", md_path)
+
+    logger.info("=" * 60)
+    logger.info("Multi-month audit complete. Overall verdict: %s", overall_verdict)
+    logger.info("=" * 60)
+
+    if overall_verdict == "FAIL":
+        sys.exit(1)
+
+
+def _generate_multi_month_report(
+    monthly_details: list[dict],
+    overall_verdict: str,
+    months: list[str],
+) -> str:
+    """Generate the markdown report for multi-month audit."""
+    lines = [
+        "# Metric Alignment Audit Report (Multi-Month)",
+        "",
+        f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"**Canonical formula:** `models.deep_sgdf_delta.metrics.smape_floor50` (multiplier=200, percent scale)",
+        f"**Months audited:** {', '.join(months)}",
+        "",
+        "## Per-Month Summary",
+        "",
+        "| Month | Rows | DA sMAPE (%) | DA sMAPE (frac) | BD Range | Missing | Duplicates | Verdict |",
+        "|-------|------|-------------|-----------------|----------|---------|------------|---------|",
+    ]
+
+    for detail in monthly_details:
+        smape_pct = f"{detail['da_anchor_smape_percent']:.4f}" if detail["da_anchor_smape_percent"] is not None else "N/A"
+        smape_frac = f"{detail['da_anchor_smape_fraction']:.6f}" if detail["da_anchor_smape_fraction"] is not None else "N/A"
+        lines.append(
+            f"| {detail['month']} "
+            f"| {detail['row_count']} "
+            f"| {smape_pct} "
+            f"| {smape_frac} "
+            f"| {detail['business_day_range']} "
+            f"| {detail['missing_rows']} "
+            f"| {detail['duplicate_rows']} "
+            f"| {detail['verdict']} |"
+        )
+
+    # Hour distribution section
+    lines.extend([
+        "",
+        "## Hour Distribution",
+        "",
+    ])
+    for detail in monthly_details:
+        lines.append(f"### {detail['month']}")
+        lines.append(f"```")
+        lines.append(detail["hour_distribution"])
+        lines.append(f"```")
+        lines.append("")
+
+    # Verdict section
+    lines.extend([
+        f"## Overall Verdict: **{overall_verdict}**",
+        "",
+        "Per-month rules: PASS if no missing/dup rows, WARN if <=48 missing, FAIL if >48 missing or duplicates",
+        "",
+        "Overall rules: FAIL if any month FAIL, WARN if any WARN, else PASS",
+        "",
+    ])
+
+    if overall_verdict == "PASS":
+        lines.append("All months pass metric alignment data integrity checks.")
+    elif overall_verdict == "WARN":
+        lines.append("Some months show minor data integrity issues (missing rows). Review data completeness.")
+    elif overall_verdict == "FAIL":
+        lines.append("One or more months have data integrity issues (>48 missing rows or duplicates). Investigate root cause.")
+    else:
+        lines.append("Insufficient data for multi-month audit.")
+
+    return "\n".join(lines)
+
+
+# ── Report generation (single-month mode) ────────────────────────────
 
 def build_comparison_rows(
     source_stats: list[dict],
@@ -420,6 +777,13 @@ def main():
     parser.add_argument("--deep-final-path", type=str, default=DEFAULT_DEEP_FINAL_PATH)
     parser.add_argument("--delta-supply-path", type=str, default=DEFAULT_DELTA_SUPPLY_PATH)
     parser.add_argument("--raw-data-path", type=str, default=DEFAULT_RAW_DATA_PATH)
+    parser.add_argument(
+        "--months",
+        type=str,
+        default=None,
+        help="Comma-separated list of YYYY-MM months for multi-month audit "
+             "(e.g. 2026-01,2026-02,2026-03). When provided, runs multi-month mode.",
+    )
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -427,6 +791,23 @@ def main():
         out_dir = PROJECT_ROOT / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── Multi-month mode ─────────────────────────────────────────────
+    if args.months is not None:
+        months = [m.strip() for m in args.months.split(",") if m.strip()]
+        if not months:
+            logger.error("No valid months provided in --months argument")
+            sys.exit(1)
+
+        # Load raw data
+        raw_df = load_raw_data(PROJECT_ROOT / args.raw_data_path)
+        if raw_df is None:
+            logger.error("Raw data not found. Cannot run multi-month audit.")
+            sys.exit(1)
+
+        run_multi_month_audit(raw_df, months, out_dir)
+        return
+
+    # ── Single-month mode (backward compatible) ──────────────────────
     logger.info("=" * 60)
     logger.info("Metric Alignment Audit")
     logger.info("=" * 60)

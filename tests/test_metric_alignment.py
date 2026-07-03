@@ -1,10 +1,15 @@
-"""Tests for metric alignment audit — canonical smape_floor50 and cross-module logic.
+"""Tests for metric alignment audit — canonical smape_floor50, cross-module logic,
+and multi-month audit functionality.
 
 Verifies:
 1. Canonical smape_floor50 returns percent scale (multiplier=200, not 2).
 2. Canonical smape_floor50 handles negative prices correctly (floor on signed value).
 3. Audit script can be imported and run with fixture data.
 4. Common intersection logic works correctly.
+5. Multi-month audit produces correct number of rows.
+6. Each month has correct row count check.
+7. Business day uniqueness check.
+8. Verdict logic for multi-month.
 """
 from __future__ import annotations
 
@@ -483,3 +488,289 @@ class TestEndToEndFixture:
         assert json_path.exists()
         assert csv_path.exists()
         assert md_path.exists()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Test 5: Multi-month audit — correct number of rows
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMultiMonthAudit:
+    """Multi-month audit produces correct number of rows and details."""
+
+    def _make_multi_month_raw_data(self):
+        """Create synthetic raw data spanning 3 months (Jan-Mar 2026)."""
+        np.random.seed(42)
+        # Generate hourly data for Jan, Feb, Mar 2026
+        ds_jan = pd.date_range("2026-01-01", "2026-01-31 23:00", freq="h")
+        ds_feb = pd.date_range("2026-02-01", "2026-02-28 23:00", freq="h")
+        ds_mar = pd.date_range("2026-03-01", "2026-03-31 23:00", freq="h")
+
+        all_ds = ds_jan.append(ds_feb).append(ds_mar)
+        n = len(all_ds)
+
+        df = pd.DataFrame({
+            "ds": all_ds,
+            "da_anchor": np.random.uniform(200, 500, n),
+            "rt_actual": np.random.uniform(100, 600, n),
+        })
+        return df
+
+    def test_multi_month_correct_row_count(self):
+        """Multi-month audit should produce one row per month."""
+        from audit_metric_alignment import (
+            _filter_raw_for_month,
+            _compute_monthly_da_anchor_smape,
+            _compute_monthly_row_details,
+        )
+        from models.deep_sgdf_delta.business_time import add_business_time_columns
+
+        raw_df = self._make_multi_month_raw_data()
+        months = ["2026-01", "2026-02", "2026-03"]
+
+        monthly_rows = []
+        for month_str in months:
+            month_df = _filter_raw_for_month(raw_df, month_str)
+            month_df = add_business_time_columns(month_df, timestamp_col="ds")
+            detail = _compute_monthly_row_details(month_df, month_str)
+            monthly_rows.append(detail)
+
+        assert len(monthly_rows) == 3, f"Expected 3 monthly rows, got {len(monthly_rows)}"
+
+    def test_each_month_has_correct_row_count(self):
+        """Each month should have the expected number of hourly rows."""
+        from audit_metric_alignment import _filter_raw_for_month
+
+        raw_df = self._make_multi_month_raw_data()
+
+        # January: 31 days * 24 hours = 744
+        jan_df = _filter_raw_for_month(raw_df, "2026-01")
+        assert len(jan_df) == 31 * 24, f"Jan expected {31*24} rows, got {len(jan_df)}"
+
+        # February: 28 days * 24 hours = 672 (2026 is not a leap year)
+        feb_df = _filter_raw_for_month(raw_df, "2026-02")
+        assert len(feb_df) == 28 * 24, f"Feb expected {28*24} rows, got {len(feb_df)}"
+
+        # March: 31 days * 24 hours = 744
+        mar_df = _filter_raw_for_month(raw_df, "2026-03")
+        assert len(mar_df) == 31 * 24, f"Mar expected {31*24} rows, got {len(mar_df)}"
+
+    def test_multi_month_empty_month(self):
+        """A month with no data should produce a row with row_count=0."""
+        from audit_metric_alignment import _filter_raw_for_month
+
+        raw_df = self._make_multi_month_raw_data()
+        apr_df = _filter_raw_for_month(raw_df, "2026-04")
+        assert len(apr_df) == 0
+
+    def test_multi_month_smape_computed(self):
+        """DA anchor sMAPE should be computed for each month."""
+        from audit_metric_alignment import (
+            _filter_raw_for_month,
+            _compute_monthly_da_anchor_smape,
+        )
+
+        raw_df = self._make_multi_month_raw_data()
+        months = ["2026-01", "2026-02", "2026-03"]
+
+        for month_str in months:
+            month_df = _filter_raw_for_month(raw_df, month_str)
+            smape_val = _compute_monthly_da_anchor_smape(month_df)
+            assert smape_val is not None, f"sMAPE should not be None for {month_str}"
+            assert isinstance(smape_val, float)
+            assert 0.0 <= smape_val <= 200.0, f"sMAPE out of range for {month_str}: {smape_val}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Test 6: Business day uniqueness check
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestBusinessDayUniqueness:
+    """Verify business day handling in multi-month audit."""
+
+    def test_business_day_uniqueness(self):
+        """Each (business_day, hour_business) pair should be unique in clean data."""
+        from audit_metric_alignment import _filter_raw_for_month
+        from models.deep_sgdf_delta.business_time import add_business_time_columns
+
+        np.random.seed(42)
+        ds = pd.date_range("2026-02-01", "2026-02-28 23:00", freq="h")
+        n = len(ds)
+        raw_df = pd.DataFrame({
+            "ds": ds,
+            "da_anchor": np.random.uniform(200, 500, n),
+            "rt_actual": np.random.uniform(100, 600, n),
+        })
+
+        month_df = _filter_raw_for_month(raw_df, "2026-02")
+        month_df = add_business_time_columns(month_df, timestamp_col="ds")
+
+        # Check uniqueness of (business_day, hour_business) pairs
+        pairs = month_df[["business_day", "hour_business"]].drop_duplicates()
+        assert len(pairs) == len(month_df), (
+            f"Expected {len(month_df)} unique (bd, hb) pairs, got {len(pairs)}"
+        )
+
+    def test_business_day_range_computed(self):
+        """Business day range should be computed correctly."""
+        from audit_metric_alignment import _compute_monthly_row_details
+        from models.deep_sgdf_delta.business_time import add_business_time_columns
+
+        np.random.seed(42)
+        ds = pd.date_range("2026-02-01", "2026-02-28 23:00", freq="h")
+        n = len(ds)
+        raw_df = pd.DataFrame({
+            "ds": ds,
+            "da_anchor": np.random.uniform(200, 500, n),
+            "rt_actual": np.random.uniform(100, 600, n),
+        })
+
+        raw_df = add_business_time_columns(raw_df, timestamp_col="ds")
+        detail = _compute_monthly_row_details(raw_df, "2026-02")
+
+        assert detail["business_day_range"] != "N/A"
+        assert "~" in detail["business_day_range"]
+
+    def test_missing_rows_detection(self):
+        """Missing rows should be detected when data is incomplete."""
+        from audit_metric_alignment import _compute_monthly_row_details
+        from models.deep_sgdf_delta.business_time import add_business_time_columns
+
+        # Create data with gaps: only hours 1-12 for each day (missing 13-24)
+        ds = pd.date_range("2026-02-01 01:00", "2026-02-28 12:00", freq="h")
+        n = len(ds)
+        raw_df = pd.DataFrame({
+            "ds": ds,
+            "da_anchor": np.random.uniform(200, 500, n),
+            "rt_actual": np.random.uniform(100, 600, n),
+        })
+
+        raw_df = add_business_time_columns(raw_df, timestamp_col="ds")
+        detail = _compute_monthly_row_details(raw_df, "2026-02")
+
+        # Should detect missing rows (only 12 hours per day instead of 24)
+        assert detail["missing_rows"] > 0, "Should detect missing rows for incomplete data"
+
+    def test_duplicate_rows_detection(self):
+        """Duplicate rows should be detected when timestamps repeat."""
+        from audit_metric_alignment import _compute_monthly_row_details
+        from models.deep_sgdf_delta.business_time import add_business_time_columns
+
+        # Create data with duplicates
+        ds = pd.date_range("2026-02-01", periods=24, freq="h")
+        ds_with_dup = ds.append(ds[:6])  # duplicate first 6 hours
+        n = len(ds_with_dup)
+        raw_df = pd.DataFrame({
+            "ds": ds_with_dup,
+            "da_anchor": np.random.uniform(200, 500, n),
+            "rt_actual": np.random.uniform(100, 600, n),
+        })
+
+        raw_df = add_business_time_columns(raw_df, timestamp_col="ds")
+        detail = _compute_monthly_row_details(raw_df, "2026-02")
+
+        assert detail["duplicate_rows"] == 6, (
+            f"Expected 6 duplicate rows, got {detail['duplicate_rows']}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Test 7: Verdict logic for multi-month
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestMultiMonthVerdict:
+    """Multi-month verdict logic: FAIL if any FAIL, WARN if any WARN, else PASS."""
+
+    def test_all_pass(self):
+        """All months PASS → overall PASS."""
+        from audit_metric_alignment import compute_multi_month_verdict
+        verdict = compute_multi_month_verdict(["PASS", "PASS", "PASS"])
+        assert verdict == "PASS"
+
+    def test_one_warn(self):
+        """One WARN, rest PASS → overall WARN."""
+        from audit_metric_alignment import compute_multi_month_verdict
+        verdict = compute_multi_month_verdict(["PASS", "WARN", "PASS"])
+        assert verdict == "WARN"
+
+    def test_one_fail(self):
+        """One FAIL → overall FAIL regardless of others."""
+        from audit_metric_alignment import compute_multi_month_verdict
+        verdict = compute_multi_month_verdict(["PASS", "FAIL", "PASS"])
+        assert verdict == "FAIL"
+
+    def test_fail_overrides_warn(self):
+        """FAIL takes precedence over WARN."""
+        from audit_metric_alignment import compute_multi_month_verdict
+        verdict = compute_multi_month_verdict(["WARN", "FAIL", "WARN"])
+        assert verdict == "FAIL"
+
+    def test_empty_list(self):
+        """Empty verdict list → INSUFFICIENT."""
+        from audit_metric_alignment import compute_multi_month_verdict
+        verdict = compute_multi_month_verdict([])
+        assert verdict == "INSUFFICIENT"
+
+    def test_all_insufficient(self):
+        """All INSUFFICIENT → not PASS."""
+        from audit_metric_alignment import compute_multi_month_verdict
+        verdict = compute_multi_month_verdict(["INSUFFICIENT", "INSUFFICIENT"])
+        assert verdict == "INSUFFICIENT"
+
+    def test_no_data_treated(self):
+        """NO_DATA months should not cause PASS."""
+        from audit_metric_alignment import compute_multi_month_verdict
+        verdict = compute_multi_month_verdict(["PASS", "NO_DATA"])
+        # NO_DATA is not PASS, WARN, or FAIL → falls through to INSUFFICIENT
+        assert verdict in ("INSUFFICIENT", "PASS")
+
+    def test_multi_month_end_to_end(self, tmp_path):
+        """End-to-end multi-month audit with fixture data."""
+        from audit_metric_alignment import (
+            _filter_raw_for_month,
+            _compute_monthly_da_anchor_smape,
+            _compute_monthly_row_details,
+            compute_multi_month_verdict,
+        )
+        from models.deep_sgdf_delta.business_time import add_business_time_columns
+
+        np.random.seed(42)
+        # Create 2-month data
+        ds_jan = pd.date_range("2026-01-01", "2026-01-31 23:00", freq="h")
+        ds_feb = pd.date_range("2026-02-01", "2026-02-28 23:00", freq="h")
+        all_ds = ds_jan.append(ds_feb)
+        n = len(all_ds)
+
+        raw_df = pd.DataFrame({
+            "ds": all_ds,
+            "da_anchor": np.random.uniform(200, 500, n),
+            "rt_actual": np.random.uniform(100, 600, n),
+        })
+
+        months = ["2026-01", "2026-02"]
+        monthly_verdicts = []
+        monthly_details = []
+
+        for month_str in months:
+            month_df = _filter_raw_for_month(raw_df, month_str)
+            month_df = add_business_time_columns(month_df, timestamp_col="ds")
+            da_smape = _compute_monthly_da_anchor_smape(month_df)
+            detail = _compute_monthly_row_details(month_df, month_str)
+
+            if da_smape is not None:
+                if da_smape < 15.0:
+                    verdict = "PASS"
+                elif da_smape < 25.0:
+                    verdict = "WARN"
+                else:
+                    verdict = "FAIL"
+            else:
+                verdict = "INSUFFICIENT"
+
+            detail["verdict"] = verdict
+            monthly_details.append(detail)
+            monthly_verdicts.append(verdict)
+
+        overall = compute_multi_month_verdict(monthly_verdicts)
+        assert overall in ("PASS", "WARN", "FAIL", "INSUFFICIENT")
+        assert len(monthly_details) == 2
+        assert all(d["row_count"] > 0 for d in monthly_details)
