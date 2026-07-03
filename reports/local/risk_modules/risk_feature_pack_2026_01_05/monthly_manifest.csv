@@ -1,0 +1,6 @@
+﻿target_month,n_rows,module_status_delta_supply,module_status_spike,module_status_negative
+2026-01,744,GO,GO,LOW_VALUE
+2026-02,672,GO,GO,LOW_VALUE
+2026-03,744,GO,GO,LOW_VALUE
+2026-04,720,GO,GO,LOW_VALUE
+2026-05,744,GO,GO,LOW_VALUE

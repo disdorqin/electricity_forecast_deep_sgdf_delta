@@ -72,10 +72,12 @@ ONLINE_COLUMNS = [
     # Spike risk
     "spike_prob",
     "extreme_spike_prob",
+    "relative_spike_prob",
     "spike_risk_score",
     # Negative risk
     "negative_prob",
     "deep_negative_prob",
+    "relative_down_prob",
     "negative_risk_score",
     # Module status
     "module_status_delta_supply",
@@ -85,6 +87,7 @@ ONLINE_COLUMNS = [
     "threshold_version",
     "risk_feature_version",
     "metric_alignment_status",
+    "metric_alignment_warning_reason",
 ]
 
 EVAL_EXTRA_COLUMNS = ["y_true"]
@@ -100,12 +103,14 @@ DELTA_SUPPLY_COL_MAP = {
 SPIKE_RISK_COL_MAP = {
     "spike_prob": "spike_prob",
     "extreme_spike_prob": "extreme_spike_prob",
+    "relative_spike_prob": "relative_spike_prob",
     "spike_risk_score": "spike_risk_score",
 }
 
 NEGATIVE_RISK_COL_MAP = {
     "negative_prob": "negative_prob",
     "deep_negative_prob": "deep_negative_prob",
+    "relative_down_prob": "relative_down_prob",
     "negative_risk_score": "negative_risk_score",
 }
 
@@ -120,12 +125,14 @@ DELTA_SUPPLY_RISK_COLS = [
 SPIKE_RISK_COLS = [
     "spike_prob",
     "extreme_spike_prob",
+    "relative_spike_prob",
     "spike_risk_score",
 ]
 
 NEGATIVE_RISK_COLS = [
     "negative_prob",
     "deep_negative_prob",
+    "relative_down_prob",
     "negative_risk_score",
 ]
 
@@ -161,8 +168,17 @@ Modes:
     )
     parser.add_argument(
         "--metric-alignment-status", type=str, required=True,
-        choices=["PASS", "FAIL"],
-        help="Metric alignment audit status. FAIL refuses to produce a formal pack.",
+        choices=["PASS", "WARN", "FAIL"],
+        help=(
+            "Metric alignment audit status. "
+            "PASS: exact alignment. "
+            "WARN: computational alignment passed but data completeness warning exists (allowed to export). "
+            "FAIL: alignment failed (export forbidden)."
+        ),
+    )
+    parser.add_argument(
+        "--metric-alignment-warning-reason", type=str, default="",
+        help="Warning reason when metric-alignment-status is WARN. Recorded in manifest.",
     )
     parser.add_argument(
         "--out-dir", type=str, required=True,
@@ -225,6 +241,58 @@ def _load_champion_summary(root: Path) -> Optional[dict]:
         with open(summary_path, "r", encoding="utf-8") as f:
             return json.load(f)
     return None
+
+
+def _load_verdict_summary(root: Path) -> Optional[dict]:
+    """Load verdict summary from a backtest root.
+
+    Reading order:
+      1. champion_summary.json, if exists
+      2. verdict.json, if exists
+      3. fallback None
+
+    Returns the loaded dict or None.
+    """
+    summary = _load_champion_summary(root)
+    if summary is not None:
+        return summary
+    verdict_path = root / "verdict.json"
+    if verdict_path.exists():
+        with open(verdict_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def _normalize_verdict_to_status(verdict: str | None) -> str:
+    """Map an overall or per-month verdict string to a module status.
+
+    Mapping rules:
+      *_CHAMPION / *_STRONG / *_ACCEPTABLE / *_GO  -> GO
+      *_LOW_VALUE                                   -> LOW_VALUE
+      *_NO_GO / NOGO                                -> NO-GO
+      INSUFFICIENT_*                                -> INSUFFICIENT
+      None / unknown                                -> UNKNOWN
+    """
+    if verdict is None:
+        return "UNKNOWN"
+    v = verdict.upper().replace("-", "_").replace(" ", "_")
+    # Check NO-GO first (before GO suffix, since NO_GO ends with _GO).
+    if "NO_GO" in v or v in ("NOGO", "NO-GO"):
+        return "NO-GO"
+    # LOW_VALUE before GO (since LOW_VALUE doesn't end with _GO, but be safe).
+    if "LOW_VALUE" in v or v == "LOW-VALUE":
+        return "LOW_VALUE"
+    # INSUFFICIENT
+    if v.startswith("INSUFFICIENT"):
+        return "INSUFFICIENT"
+    # Check for GO-like verdicts
+    for suffix in ("_CHAMPION", "_STRONG", "_ACCEPTABLE", "_GO"):
+        if v.endswith(suffix) or v == suffix.lstrip("_"):
+            return "GO"
+    # Direct matches
+    if v in ("GO", "ACCEPTABLE", "STRONG", "CHAMPION"):
+        return "GO"
+    return "UNKNOWN"
 
 
 def _get_monthly_verdicts(champion_summary: Optional[dict]) -> dict[str, str]:
@@ -329,14 +397,7 @@ def _load_and_prepare_module(
 
         # Determine module status for this month.
         verdict = monthly_verdicts.get(target_month, None)
-        if _is_nogo_verdict(verdict):
-            status = "NO-GO"
-        elif verdict is not None and verdict.upper() in ("ACCEPTABLE", "STRONG", "GO"):
-            status = "GO"
-        elif verdict is not None and verdict.upper() == "LOW_VALUE":
-            status = "LOW_VALUE"
-        else:
-            status = "UNKNOWN"
+        status = _normalize_verdict_to_status(verdict)
         month_status[target_month] = status
 
         # If NO-GO for this month, NaN out the risk columns.
@@ -363,7 +424,8 @@ def build_risk_feature_pack_multimonth(
     negative_root: Path,
     mode: str,
     metric_alignment_status: str,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    metric_alignment_warning_reason: str = "",
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, str]]:
     """Merge multi-month predictions from all three modules into a unified pack.
 
     Parameters
@@ -372,20 +434,37 @@ def build_risk_feature_pack_multimonth(
     spike_root : Path to SpikeRisk backtest root directory
     negative_root : Path to NegativeRisk backtest root directory
     mode : "online" or "eval"
-    metric_alignment_status : "PASS" or "FAIL"
+    metric_alignment_status : "PASS", "WARN", or "FAIL"
+    metric_alignment_warning_reason : reason string for WARN status
 
     Returns
     -------
-    (pack_df, monthly_manifest_df) tuple.
+    (pack_df, monthly_manifest_df, status_sources) tuple.
+    status_sources maps module_name -> "monthly_verdicts" | "overall_verdict".
     """
-    # Load champion summaries for monthly verdicts.
-    delta_summary = _load_champion_summary(delta_supply_root)
-    spike_summary = _load_champion_summary(spike_root)
-    negative_summary = _load_champion_summary(negative_root)
+    # Load verdict summaries (champion_summary.json -> verdict.json fallback).
+    delta_summary = _load_verdict_summary(delta_supply_root)
+    spike_summary = _load_verdict_summary(spike_root)
+    negative_summary = _load_verdict_summary(negative_root)
 
     delta_verdicts = _get_monthly_verdicts(delta_summary)
     spike_verdicts = _get_monthly_verdicts(spike_summary)
     negative_verdicts = _get_monthly_verdicts(negative_summary)
+
+    # Track status sources: "monthly_verdicts" if monthly verdicts exist,
+    # otherwise "overall_verdict" if we used overall verdict as fallback.
+    status_sources: dict[str, str] = {}
+    for name, summary, verdicts in [
+        ("delta_supply", delta_summary, delta_verdicts),
+        ("spike", spike_summary, spike_verdicts),
+        ("negative", negative_summary, negative_verdicts),
+    ]:
+        if verdicts:
+            status_sources[name] = "monthly_verdicts"
+        elif summary is not None and "overall_verdict" in summary:
+            status_sources[name] = "overall_verdict"
+        else:
+            status_sources[name] = "none"
 
     # Load and prepare each module.
     delta_df, delta_status = _load_and_prepare_module(
@@ -470,6 +549,9 @@ def build_risk_feature_pack_multimonth(
     merged["threshold_version"] = THRESHOLD_VERSION
     merged["risk_feature_version"] = RISK_FEATURE_VERSION
     merged["metric_alignment_status"] = metric_alignment_status
+    merged["metric_alignment_warning_reason"] = (
+        metric_alignment_warning_reason if metric_alignment_status == "WARN" else ""
+    )
 
     # Eval mode: include y_true if available from any source.
     if mode == "eval":
@@ -518,7 +600,7 @@ def build_risk_feature_pack_multimonth(
         })
     monthly_manifest = pd.DataFrame(monthly_rows)
 
-    return pack, monthly_manifest
+    return pack, monthly_manifest, status_sources
 
 
 def write_manifest(
@@ -527,8 +609,13 @@ def write_manifest(
     mode: str,
     metric_alignment_status: str,
     monthly_manifest_df: pd.DataFrame,
+    status_sources: dict[str, str] | None = None,
+    metric_alignment_warning_reason: str = "",
 ) -> None:
     """Write manifest.json and monthly_manifest.csv."""
+    if status_sources is None:
+        status_sources = {}
+
     # Compute per-module NO-GO month lists.
     nogo_delta = []
     nogo_spike = []
@@ -548,6 +635,7 @@ def write_manifest(
         "threshold_version": THRESHOLD_VERSION,
         "mode": mode,
         "metric_alignment_status": metric_alignment_status,
+        "metric_alignment_warning_reason": metric_alignment_warning_reason,
         "n_rows": len(pack_df),
         "n_months": int(pack_df["target_month"].nunique()) if "target_month" in pack_df.columns else 0,
         "columns": list(pack_df.columns),
@@ -564,6 +652,11 @@ def write_manifest(
             "delta_supply": nogo_delta,
             "spike": nogo_spike,
             "negative": nogo_negative,
+        },
+        "status_sources": {
+            "delta_supply": status_sources.get("delta_supply", "unknown"),
+            "spike": status_sources.get("spike", "unknown"),
+            "negative": status_sources.get("negative", "unknown"),
         },
     }
 
@@ -588,7 +681,7 @@ def main() -> None:
         logger.error(
             "Metric alignment status is FAIL. "
             "Refusing to produce formal risk feature pack. "
-            "Fix alignment issues first and re-run with --metric-alignment-status PASS."
+            "Fix alignment issues first and re-run with --metric-alignment-status PASS or WARN."
         )
         sys.exit(1)
 
@@ -600,13 +693,32 @@ def main() -> None:
     negative_root = _resolve_path(args.negative_root)
 
     # Build unified multi-month pack.
-    pack_df, monthly_manifest_df = build_risk_feature_pack_multimonth(
+    pack_df, monthly_manifest_df, status_sources = build_risk_feature_pack_multimonth(
         delta_supply_root=delta_root,
         spike_root=spike_root,
         negative_root=negative_root,
         mode=args.mode,
         metric_alignment_status=args.metric_alignment_status,
+        metric_alignment_warning_reason=args.metric_alignment_warning_reason,
     )
+
+    # Validate: not all module_status can be UNKNOWN.
+    status_cols = ["module_status_delta_supply", "module_status_spike", "module_status_negative"]
+    all_unknown = True
+    for col in status_cols:
+        if col in pack_df.columns:
+            non_unknown = pack_df[col][pack_df[col] != "UNKNOWN"]
+            if len(non_unknown) > 0:
+                all_unknown = False
+                break
+    if all_unknown:
+        logger.error(
+            "All module_status columns are UNKNOWN. "
+            "Cannot produce a valid risk feature pack without any known module status. "
+            "Check that verdict.json or champion_summary.json exist in backtest roots."
+        )
+        sys.exit(1)
+
     logger.info(
         "Risk feature pack (multimonth): %d rows, %d columns, %d months (mode=%s)",
         len(pack_df), len(pack_df.columns),
@@ -639,7 +751,10 @@ def main() -> None:
     pack_df.to_csv(pack_path, index=False, encoding="utf-8-sig")
     logger.info("Risk feature pack -> %s", pack_path)
 
-    write_manifest(out_dir, pack_df, args.mode, args.metric_alignment_status, monthly_manifest_df)
+    write_manifest(
+        out_dir, pack_df, args.mode, args.metric_alignment_status,
+        monthly_manifest_df, status_sources, args.metric_alignment_warning_reason,
+    )
 
     logger.info("All outputs saved to %s", out_dir)
 

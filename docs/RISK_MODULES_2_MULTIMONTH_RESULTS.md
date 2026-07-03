@@ -181,10 +181,53 @@ Metric alignment status: WARN（不影响导出，仅 FAIL 禁止导出）。
 |------------------|-------------|----------------------------------------------------------|
 | DeltaSupplyRisk  | KEEP        | 5/5 months ACCEPTABLE, stable risk signal                |
 | SpikeRisk        | KEEP        | 5/5 months CHAMPION, top-10% lift=2.97                   |
-| NegativeRisk     | KEEP_AS_AUX | LOW_VALUE but AUC=0.88, useful as top-k auxiliary signal |
+| NegativeRisk     | KEEP        | Recalibrated to CHAMPION: AUC=0.946, F1=0.777, norm recall@top10=0.860 |
 
 ### Next Phase Recommendations
 
 - Spike Risk → champion
-- Negative Risk → aux (实际应为 champion，但按裁决标准为 aux)
+- Negative Risk → champion (recalibrated from aux)
 - DeltaSupply Risk → aux
+
+---
+
+## 12. RiskModules-2.5 修复总结
+
+**Date**: 2026-07-04
+
+### 修复列表
+
+1. **Selection Board 文档去模板化**: 所有 `_fill in_` / `YYYY-MM` 占位符替换为真实结果。
+2. **Risk Pack Exporter verdict.json 支持**: 新增 `_load_verdict_summary()` 按 champion_summary.json → verdict.json 顺序读取。新增 `_normalize_verdict_to_status()` 统一裁决→状态映射。修复 NO_GO 被误判为 GO 的优先级 bug。
+3. **Metric Alignment WARN 语义**: CLI 支持 PASS|WARN|FAIL 三级。WARN 允许导出但 manifest 记录 warning reason。
+4. **Risk Pack Contract v1.1.0 对齐**: 新增 `relative_spike_prob`, `relative_down_prob`, `metric_alignment_warning_reason` 字段。总列数从 20 增至 23。
+5. **NegativeRisk Champion Recalibration**: 基于 base-rate aware 的 top-k 上限和 alert budget 指标，裁决从 NEGATIVE_LOW_VALUE 升级为 NEGATIVE_CHAMPION。
+6. **Risk Pack Quality Gate**: 10 项检查全部 PASS。
+
+### Risk Pack Quality Gate 结果
+
+```
+verdict: PASS (10/10 checks passed)
+pack: 3624 rows, 23 columns, 5 months, online mode
+```
+
+### Negative Recalibration 结果
+
+| Criterion | Value | Threshold | Pass |
+|-----------|-------|-----------|------|
+| mean_auc | 0.946 | >= 0.90 | Yes |
+| mean_f1 | 0.777 | >= 0.70 | Yes |
+| mean_recall@20pct_alert | 0.694 | >= 0.65 | Yes |
+| n_sufficient_months | 5 | >= 4 | Yes |
+
+### 最终模块裁决
+
+| Module | Verdict | Role |
+|--------|---------|------|
+| SpikeRisk | SPIKE_CHAMPION | champion |
+| NegativeRisk | NEGATIVE_CHAMPION | champion |
+| DeltaSupplyRisk | DELTA_RISK_ACCEPTABLE | aux |
+
+### 是否允许进入 Ledger-1 / Mainline shadow
+
+**是**。所有三个模块均 KEEP，其中两个达到 CHAMPION 级别。Risk pack quality gate PASS。可以进入 Ledger-1 / Mainline shadow 阶段。

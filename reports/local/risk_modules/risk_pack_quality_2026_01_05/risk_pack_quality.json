@@ -1,0 +1,81 @@
+{
+  "verdict": "PASS",
+  "checks": [
+    {
+      "index": 1,
+      "name": "row_count_matches_manifest_unique_keys",
+      "status": "PASS",
+      "detail": "pack rows=3624, manifest unique_keys=3624",
+      "critical": true
+    },
+    {
+      "index": 2,
+      "name": "no_y_true_in_online_mode",
+      "status": "PASS",
+      "detail": "mode=online, y_true present=False",
+      "critical": false
+    },
+    {
+      "index": 3,
+      "name": "unique_keys_within_target_month",
+      "status": "PASS",
+      "detail": "duplicate rows=0",
+      "critical": true
+    },
+    {
+      "index": 4,
+      "name": "probability_columns_in_unit_interval",
+      "status": "PASS",
+      "detail": "out-of-range values=0",
+      "critical": true
+    },
+    {
+      "index": 5,
+      "name": "risk_feature_version_starts_with_v1",
+      "status": "PASS",
+      "detail": "versions found=['v1.1.0']",
+      "critical": true
+    },
+    {
+      "index": 6,
+      "name": "metric_alignment_status_valid",
+      "status": "PASS",
+      "detail": "statuses found=['WARN']",
+      "critical": true
+    },
+    {
+      "index": 7,
+      "name": "module_status_not_all_unknown",
+      "status": "PASS",
+      "detail": "status columns checked=['module_status_delta_supply', 'module_status_spike', 'module_status_negative'], all_unknown=False",
+      "critical": true
+    },
+    {
+      "index": 8,
+      "name": "target_month_rows_match_monthly_manifest",
+      "status": "PASS",
+      "detail": "all months match",
+      "critical": false
+    },
+    {
+      "index": 9,
+      "name": "no_duplicate_ds_hour_within_target_month",
+      "status": "PASS",
+      "detail": "ds duplicates=0, ds+hour duplicates=0",
+      "critical": false
+    },
+    {
+      "index": 10,
+      "name": "nan_risk_columns_only_for_nogo_or_insufficient",
+      "status": "PASS",
+      "detail": "all NaN risk columns have valid NO-GO/INSUFFICIENT status",
+      "critical": false
+    }
+  ],
+  "n_checks": 10,
+  "n_pass": 10,
+  "n_fail": 0,
+  "timestamp": "2026-07-04T00:33:52.748496",
+  "pack_path": "D:\\作业\\大创_挑战杯_互联网\\大学生创新创业计划\\大创实现\\其他资料\\deep_model_for_electricity\\reports\\local\\risk_modules\\risk_feature_pack_2026_01_05\\risk_feature_pack.csv",
+  "manifest_path": "D:\\作业\\大创_挑战杯_互联网\\大学生创新创业计划\\大创实现\\其他资料\\deep_model_for_electricity\\reports\\local\\risk_modules\\risk_feature_pack_2026_01_05\\manifest.json"
+}
