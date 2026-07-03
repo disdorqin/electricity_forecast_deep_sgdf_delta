@@ -12,8 +12,6 @@ Key constraints:
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -21,22 +19,12 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-# ── SGDFNet integration ──────────────────────────────────────────────
-# We import SGDFNet's data contract to reuse feature engineering.
-# Try multiple locations: same repo, sibling directory, hardcoded path.
-_THIS_DIR = Path(__file__).resolve().parent
-_CANDIDATES = [
-    _THIS_DIR.parent.parent / "SGDFNet" / "src",                          # inside same repo
-    _THIS_DIR.parent.parent / "electricity_forecast_model2.0_exp" / "SGDFNet" / "src",  # parent
-    _THIS_DIR.parent.parent.parent / "electricity_forecast_model2.0_exp" / "SGDFNet" / "src",  # sibling
-    Path(r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp\SGDFNet\src"),
-]
-for _p in _CANDIDATES:
-    if _p.exists() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-        break
-
-from sgdfnet.data_contract import (  # noqa: E402
+# ── SGDFNet integration via bridge ────────────────────────────────────
+# The sgdfnet_bridge module locates the SGDFNet source tree (CLI flag,
+# environment variable, or sibling directory) and injects it into
+# sys.path at import time.  We then import the data-contract symbols
+# we need through the bridge's re-exports.
+from models.deep_sgdf_delta.sgdfnet_bridge import (  # noqa: E402
     TIMESTAMP_COL,
     DA_COL,
     RT_COL,
