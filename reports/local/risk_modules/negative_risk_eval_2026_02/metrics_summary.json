@@ -1,0 +1,188 @@
+{
+  "n_predictions": 672,
+  "verdict": "NEGATIVE_LOW_VALUE",
+  "verdict_reason": "Max lift across top-k = 3.52 >= 1.3",
+  "da_anchor_smape_floor50": 26.697597610015777,
+  "classification": [
+    {
+      "label": "negative_label",
+      "n_valid": 672,
+      "n_positive": 210,
+      "positive_rate": 0.3125,
+      "precision": 0.8135593220338984,
+      "recall": 0.6857142857142857,
+      "f1": 0.7441860465116279,
+      "roc_auc": 0.9431148216862503,
+      "pr_auc": 0.8766891283557975
+    },
+    {
+      "label": "deep_negative_label",
+      "n_valid": 672,
+      "positive_rate": 0.0,
+      "status": "single_class"
+    },
+    {
+      "label": "relative_down_label",
+      "n_valid": 672,
+      "n_positive": 37,
+      "positive_rate": 0.05505952380952381,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "roc_auc": 0.8334326452436689,
+      "pr_auc": 0.15126369510206944
+    }
+  ],
+  "topk_capture": [
+    {
+      "label": "negative_label",
+      "top_k_pct": 1,
+      "k": 6,
+      "n_top_k": 6,
+      "n_positive_in_top_k": 6,
+      "capture_rate": 1.0,
+      "lift": 3.2,
+      "alert_rate": 0.008928571428571428
+    },
+    {
+      "label": "negative_label",
+      "top_k_pct": 3,
+      "k": 20,
+      "n_top_k": 20,
+      "n_positive_in_top_k": 20,
+      "capture_rate": 1.0,
+      "lift": 3.2,
+      "alert_rate": 0.02976190476190476
+    },
+    {
+      "label": "negative_label",
+      "top_k_pct": 5,
+      "k": 33,
+      "n_top_k": 33,
+      "n_positive_in_top_k": 33,
+      "capture_rate": 1.0,
+      "lift": 3.2,
+      "alert_rate": 0.049107142857142856
+    },
+    {
+      "label": "negative_label",
+      "top_k_pct": 10,
+      "k": 67,
+      "n_top_k": 67,
+      "n_positive_in_top_k": 63,
+      "capture_rate": 0.9402985074626866,
+      "lift": 3.008955223880597,
+      "alert_rate": 0.09970238095238096
+    },
+    {
+      "label": "negative_label",
+      "top_k_pct": 20,
+      "k": 134,
+      "n_top_k": 134,
+      "n_positive_in_top_k": 119,
+      "capture_rate": 0.8880597014925373,
+      "lift": 2.8417910447761194,
+      "alert_rate": 0.19940476190476192
+    },
+    {
+      "label": "deep_negative_label",
+      "top_k_pct": 1,
+      "k": 6,
+      "n_top_k": 6,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.008928571428571428
+    },
+    {
+      "label": "deep_negative_label",
+      "top_k_pct": 3,
+      "k": 20,
+      "n_top_k": 20,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.02976190476190476
+    },
+    {
+      "label": "deep_negative_label",
+      "top_k_pct": 5,
+      "k": 33,
+      "n_top_k": 33,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.049107142857142856
+    },
+    {
+      "label": "deep_negative_label",
+      "top_k_pct": 10,
+      "k": 67,
+      "n_top_k": 67,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.09970238095238096
+    },
+    {
+      "label": "deep_negative_label",
+      "top_k_pct": 20,
+      "k": 134,
+      "n_top_k": 134,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.19940476190476192
+    },
+    {
+      "label": "relative_down_label",
+      "top_k_pct": 1,
+      "k": 6,
+      "n_top_k": 6,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": 0.0,
+      "alert_rate": 0.008928571428571428
+    },
+    {
+      "label": "relative_down_label",
+      "top_k_pct": 3,
+      "k": 20,
+      "n_top_k": 20,
+      "n_positive_in_top_k": 1,
+      "capture_rate": 0.05,
+      "lift": 0.9081081081081082,
+      "alert_rate": 0.02976190476190476
+    },
+    {
+      "label": "relative_down_label",
+      "top_k_pct": 5,
+      "k": 33,
+      "n_top_k": 33,
+      "n_positive_in_top_k": 2,
+      "capture_rate": 0.06060606060606061,
+      "lift": 1.1007371007371007,
+      "alert_rate": 0.049107142857142856
+    },
+    {
+      "label": "relative_down_label",
+      "top_k_pct": 10,
+      "k": 67,
+      "n_top_k": 67,
+      "n_positive_in_top_k": 11,
+      "capture_rate": 0.16417910447761194,
+      "lift": 2.981847519160952,
+      "alert_rate": 0.09970238095238096
+    },
+    {
+      "label": "relative_down_label",
+      "top_k_pct": 20,
+      "k": 134,
+      "n_top_k": 134,
+      "n_positive_in_top_k": 26,
+      "capture_rate": 0.19402985074626866,
+      "lift": 3.5240016135538523,
+      "alert_rate": 0.19940476190476192
+    }
+  ]
+}

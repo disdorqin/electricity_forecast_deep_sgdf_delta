@@ -1,0 +1,77 @@
+{
+  "audit_timestamp": "2026-07-03T23:02:45.032499",
+  "canonical_formula": "models.deep_sgdf_delta.metrics.smape_floor50",
+  "multiplier": 200,
+  "floor": 50.0,
+  "sources_loaded": [
+    "DeepFinal",
+    "DeltaSupply",
+    "RawData"
+  ],
+  "per_source_stats": [
+    {
+      "source": "DeepFinal",
+      "row_count": 672,
+      "date_min": "2026-02-01 01:00:00",
+      "date_max": "2026-03-01 00:00:00",
+      "da_anchor_mean": 212.6279,
+      "da_anchor_std": 193.4911,
+      "da_anchor_min": -80.0,
+      "da_anchor_max": 549.875,
+      "rt_actual_mean": null,
+      "rt_actual_std": null,
+      "rt_actual_min": null,
+      "rt_actual_max": null
+    },
+    {
+      "source": "DeltaSupply",
+      "row_count": 672,
+      "date_min": "2026-02-01 00:00:00",
+      "date_max": "2026-02-28 23:00:00",
+      "da_anchor_mean": 212.6401,
+      "da_anchor_std": 193.5007,
+      "da_anchor_min": -80.0,
+      "da_anchor_max": 549.875,
+      "rt_actual_mean": 206.7426,
+      "rt_actual_std": 215.084,
+      "rt_actual_min": -85.069,
+      "rt_actual_max": 700.547
+    },
+    {
+      "source": "RawData",
+      "row_count": 39168,
+      "date_min": "2022-01-01 01:00:00",
+      "date_max": "2026-06-21 00:00:00",
+      "da_anchor_mean": 326.0921,
+      "da_anchor_std": 199.0494,
+      "da_anchor_min": -100.0,
+      "da_anchor_max": 1500.0,
+      "rt_actual_mean": 324.498,
+      "rt_actual_std": 222.1887,
+      "rt_actual_min": -100.0,
+      "rt_actual_max": 1424.31
+    }
+  ],
+  "per_source_smape_full": {
+    "DeepFinal": null,
+    "DeltaSupply": null,
+    "RawData": null
+  },
+  "common_intersection_rows": 671,
+  "common_smape": {
+    "DeepFinal": {
+      "common_rows": 671,
+      "smape_common": null
+    },
+    "DeltaSupply": {
+      "common_rows": 671,
+      "smape_common": 26.7203
+    },
+    "RawData": {
+      "common_rows": 671,
+      "smape_common": 26.7203
+    }
+  },
+  "verdict": "PASS",
+  "spread_pp": 0.0
+}

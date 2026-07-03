@@ -1,0 +1,4 @@
+﻿source,row_count,date_min,date_max,da_anchor_mean,da_anchor_std,rt_actual_mean,rt_actual_std,smape_floor50_full,common_rows,smape_floor50_common
+DeepFinal,672,2026-02-01 01:00:00,2026-03-01 00:00:00,212.6279,193.4911,,,,671,
+DeltaSupply,672,2026-02-01 00:00:00,2026-02-28 23:00:00,212.6401,193.5007,206.7426,215.084,,671,26.7203
+RawData,39168,2022-01-01 01:00:00,2026-06-21 00:00:00,326.0921,199.0494,324.498,222.1887,,671,26.7203

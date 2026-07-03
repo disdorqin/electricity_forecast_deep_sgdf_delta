@@ -1,0 +1,188 @@
+{
+  "n_predictions": 672,
+  "verdict": "SPIKE_LOW_VALUE",
+  "verdict_reason": "Max lift across top-k = 10.67 >= 1.3",
+  "da_anchor_smape_floor50": 26.697597610015777,
+  "classification": [
+    {
+      "label": "spike_label",
+      "n_valid": 672,
+      "n_positive": 21,
+      "positive_rate": 0.03125,
+      "precision": 0.38461538461538464,
+      "recall": 0.23809523809523808,
+      "f1": 0.29411764705882354,
+      "roc_auc": 0.918952527247458,
+      "pr_auc": 0.26358372684503145
+    },
+    {
+      "label": "extreme_spike_label",
+      "n_valid": 672,
+      "positive_rate": 0.0,
+      "status": "single_class"
+    },
+    {
+      "label": "relative_spike_label",
+      "n_valid": 672,
+      "n_positive": 33,
+      "positive_rate": 0.049107142857142856,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "roc_auc": 0.7901076492625788,
+      "pr_auc": 0.1610959689446756
+    }
+  ],
+  "topk_capture": [
+    {
+      "label": "spike_label",
+      "top_k_pct": 1,
+      "k": 6,
+      "n_top_k": 6,
+      "n_positive_in_top_k": 2,
+      "capture_rate": 0.3333333333333333,
+      "lift": 10.666666666666666,
+      "alert_rate": 0.008928571428571428
+    },
+    {
+      "label": "spike_label",
+      "top_k_pct": 3,
+      "k": 20,
+      "n_top_k": 20,
+      "n_positive_in_top_k": 6,
+      "capture_rate": 0.3,
+      "lift": 9.6,
+      "alert_rate": 0.02976190476190476
+    },
+    {
+      "label": "spike_label",
+      "top_k_pct": 5,
+      "k": 33,
+      "n_top_k": 33,
+      "n_positive_in_top_k": 10,
+      "capture_rate": 0.30303030303030304,
+      "lift": 9.696969696969697,
+      "alert_rate": 0.049107142857142856
+    },
+    {
+      "label": "spike_label",
+      "top_k_pct": 10,
+      "k": 67,
+      "n_top_k": 67,
+      "n_positive_in_top_k": 11,
+      "capture_rate": 0.16417910447761194,
+      "lift": 5.253731343283582,
+      "alert_rate": 0.09970238095238096
+    },
+    {
+      "label": "spike_label",
+      "top_k_pct": 20,
+      "k": 134,
+      "n_top_k": 134,
+      "n_positive_in_top_k": 20,
+      "capture_rate": 0.14925373134328357,
+      "lift": 4.776119402985074,
+      "alert_rate": 0.19940476190476192
+    },
+    {
+      "label": "extreme_spike_label",
+      "top_k_pct": 1,
+      "k": 6,
+      "n_top_k": 6,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.008928571428571428
+    },
+    {
+      "label": "extreme_spike_label",
+      "top_k_pct": 3,
+      "k": 20,
+      "n_top_k": 20,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.02976190476190476
+    },
+    {
+      "label": "extreme_spike_label",
+      "top_k_pct": 5,
+      "k": 33,
+      "n_top_k": 33,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.049107142857142856
+    },
+    {
+      "label": "extreme_spike_label",
+      "top_k_pct": 10,
+      "k": 67,
+      "n_top_k": 67,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.09970238095238096
+    },
+    {
+      "label": "extreme_spike_label",
+      "top_k_pct": 20,
+      "k": 134,
+      "n_top_k": 134,
+      "n_positive_in_top_k": 0,
+      "capture_rate": 0.0,
+      "lift": NaN,
+      "alert_rate": 0.19940476190476192
+    },
+    {
+      "label": "relative_spike_label",
+      "top_k_pct": 1,
+      "k": 6,
+      "n_top_k": 6,
+      "n_positive_in_top_k": 1,
+      "capture_rate": 0.16666666666666666,
+      "lift": 3.393939393939394,
+      "alert_rate": 0.008928571428571428
+    },
+    {
+      "label": "relative_spike_label",
+      "top_k_pct": 3,
+      "k": 20,
+      "n_top_k": 20,
+      "n_positive_in_top_k": 4,
+      "capture_rate": 0.2,
+      "lift": 4.072727272727273,
+      "alert_rate": 0.02976190476190476
+    },
+    {
+      "label": "relative_spike_label",
+      "top_k_pct": 5,
+      "k": 33,
+      "n_top_k": 33,
+      "n_positive_in_top_k": 5,
+      "capture_rate": 0.15151515151515152,
+      "lift": 3.0853994490358128,
+      "alert_rate": 0.049107142857142856
+    },
+    {
+      "label": "relative_spike_label",
+      "top_k_pct": 10,
+      "k": 67,
+      "n_top_k": 67,
+      "n_positive_in_top_k": 10,
+      "capture_rate": 0.14925373134328357,
+      "lift": 3.039348710990502,
+      "alert_rate": 0.09970238095238096
+    },
+    {
+      "label": "relative_spike_label",
+      "top_k_pct": 20,
+      "k": 134,
+      "n_top_k": 134,
+      "n_positive_in_top_k": 21,
+      "capture_rate": 0.15671641791044777,
+      "lift": 3.1913161465400273,
+      "alert_rate": 0.19940476190476192
+    }
+  ]
+}

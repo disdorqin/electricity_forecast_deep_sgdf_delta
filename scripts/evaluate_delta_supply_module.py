@@ -95,16 +95,15 @@ def compute_regression_metrics(y_true, y_pred):
     }
 
 
+from models.deep_sgdf_delta.metrics import smape_floor50 as _canonical_smape_floor50
+
+
 def compute_smape_floor50(y_true, y_pred):
-    """sMAPE with floor-50 capping."""
-    valid = ~(np.isnan(y_true) | np.isnan(y_pred))
+    """sMAPE with floor-50 capping — delegates to canonical implementation."""
+    valid = ~(np.isnan(np.asarray(y_true, dtype=float)) | np.isnan(np.asarray(y_pred, dtype=float)))
     if valid.sum() == 0:
         return np.nan
-    yt = y_true[valid]
-    yp = y_pred[valid]
-    return float(np.mean(
-        2 * np.abs(yt - yp) / (np.maximum(np.abs(yt), 50) + np.maximum(np.abs(yp), 50))
-    ))
+    return _canonical_smape_floor50(np.asarray(y_true)[valid], np.asarray(y_pred)[valid])
 
 
 def run_correction_simulation(pred_df, correction_weights):

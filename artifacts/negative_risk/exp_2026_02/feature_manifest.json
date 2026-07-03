@@ -1,0 +1,24 @@
+{
+  "n_features": 7,
+  "feature_columns": [
+    "da_anchor",
+    "hour_sin",
+    "hour_cos",
+    "month_sin",
+    "month_cos",
+    "previous_day_price_delta_mean",
+    "previous_day_price_delta_std"
+  ],
+  "missing_features": [
+    "forecast_renewable_share",
+    "forecast_wind_share",
+    "forecast_solar_share",
+    "forecast_net_load",
+    "forecast_bidding_pressure"
+  ],
+  "derived_feature_coverage": 0.0,
+  "lag_feature_coverage": 1.0,
+  "calendar_feature_coverage": 1.0,
+  "leakage_check": true,
+  "verdict": "PARTIAL_READY"
+}

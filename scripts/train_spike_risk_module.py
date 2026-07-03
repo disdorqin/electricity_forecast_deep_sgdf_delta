@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""Train DeltaSupply deviation risk module.
+"""Train SpikeRisk classification module.
 
 Usage:
-    python scripts/train_delta_supply_module.py \
+    python scripts/train_spike_risk_module.py \
         --data-path ../electricity_forecast_model2.0_exp/data/shandong_pmos_hourly.csv \
         --target-month 2026-02 \
-        --out-dir artifacts/delta_supply/exp_2026_02
+        --out-dir artifacts/spike_risk/exp_2026_02
 """
 from __future__ import annotations
 
@@ -25,16 +25,16 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from models.deep_sgdf_delta.delta_supply_targets import (
-    DeltaSupplyThresholds,
-    compute_delta_supply_targets,
+from models.deep_sgdf_delta.spike_risk_targets import (
+    SpikeRiskThresholds,
+    compute_spike_risk_targets,
 )
-from models.deep_sgdf_delta.delta_supply_features import (
-    build_delta_supply_features,
+from models.deep_sgdf_delta.spike_risk_features import (
+    build_spike_risk_features,
 )
-from models.deep_sgdf_delta.delta_supply_model import (
-    DeltaSupplyConfig,
-    DeltaSupplyModel,
+from models.deep_sgdf_delta.spike_risk_model import (
+    SpikeRiskConfig,
+    SpikeRiskModel,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -42,16 +42,15 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Train DeltaSupply module")
+    p = argparse.ArgumentParser(description="Train SpikeRisk module")
     p.add_argument("--data-path", required=True, help="Path to shandong_pmos_hourly.csv")
     p.add_argument("--target-month", required=True, help="Target month YYYY-MM")
     p.add_argument("--start-date", default=None, help="Start date YYYY-MM-DD")
     p.add_argument("--end-date", default=None, help="End date YYYY-MM-DD")
     p.add_argument("--out-dir", required=True, help="Output directory")
-    p.add_argument("--threshold-upward", type=float, default=100.0)
-    p.add_argument("--threshold-downward", type=float, default=-100.0)
-    p.add_argument("--threshold-abs-large", type=float, default=150.0)
-    p.add_argument("--clip", type=float, default=500.0)
+    p.add_argument("--threshold-spike", type=float, default=500.0)
+    p.add_argument("--threshold-extreme-spike", type=float, default=800.0)
+    p.add_argument("--threshold-relative-spike", type=float, default=200.0)
     p.add_argument("--mode", choices=["FULL_DAY", "INTRADAY"], default="FULL_DAY")
     p.add_argument("--fast-dev-run", action="store_true", help="Use small subset for debugging")
     return p.parse_args()
@@ -123,23 +122,22 @@ def main():
         logger.info("Fast dev run: using %d rows", len(raw_df))
 
     # Step 1: Compute targets
-    thresholds = DeltaSupplyThresholds(
-        upward=args.threshold_upward,
-        downward=args.threshold_downward,
-        abs_large=args.threshold_abs_large,
-        clip=args.clip,
+    thresholds = SpikeRiskThresholds(
+        spike=args.threshold_spike,
+        extreme_spike=args.threshold_extreme_spike,
+        relative_spike=args.threshold_relative_spike,
     )
-    target_result = compute_delta_supply_targets(raw_df, thresholds=thresholds)
+    target_result = compute_spike_risk_targets(raw_df, thresholds=thresholds)
     logger.info("Targets computed: %d rows, %d valid", target_result.n_rows, target_result.n_valid)
-    logger.info("Upward rate: %.3f, Downward rate: %.3f, Large abs rate: %.3f",
-                target_result.upward_rate, target_result.downward_rate, target_result.large_abs_rate)
+    logger.info("Spike rate: %.3f, Extreme spike rate: %.3f, Relative spike rate: %.3f",
+                target_result.spike_rate, target_result.extreme_spike_rate, target_result.relative_spike_rate)
 
     # Step 2: Build features
-    feature_result = build_delta_supply_features(raw_df, mode=args.mode)
+    feature_result = build_spike_risk_features(raw_df, mode=args.mode)
     logger.info("Features built: %d features, verdict=%s",
                 feature_result.audit.n_features, feature_result.audit.verdict)
-    logger.info("Forecast coverage: %.2f, Lag coverage: %.2f, Calendar coverage: %.2f",
-                feature_result.audit.forecast_feature_coverage,
+    logger.info("Derived coverage: %.2f, Lag coverage: %.2f, Calendar coverage: %.2f",
+                feature_result.audit.derived_feature_coverage,
                 feature_result.audit.lag_feature_coverage,
                 feature_result.audit.calendar_feature_coverage)
 
@@ -151,8 +149,7 @@ def main():
     work = feature_result.df.copy()
 
     # Merge target columns
-    target_cols = ["price_delta", "upward_deviation_label", "downward_deviation_label",
-                   "large_abs_deviation_label", "deviation_magnitude_target"]
+    target_cols = ["spike_label", "extreme_spike_label", "relative_spike_label"]
     for col in target_cols:
         if col in target_result.df.columns and col not in work.columns:
             work[col] = target_result.df[col].values
@@ -174,18 +171,17 @@ def main():
 
     # Prepare training data
     X_train = work.loc[train_mask, feature_cols].copy()
-    y_up_train = work.loc[train_mask, "upward_deviation_label"].values
-    y_down_train = work.loc[train_mask, "downward_deviation_label"].values
-    y_large_train = work.loc[train_mask, "large_abs_deviation_label"].values
-    y_mag_train = work.loc[train_mask, "deviation_magnitude_target"].values
+    y_spike_train = work.loc[train_mask, "spike_label"].values
+    y_extreme_train = work.loc[train_mask, "extreme_spike_label"].values
+    y_relative_train = work.loc[train_mask, "relative_spike_label"].values
 
     # Fill NaN in features with 0 for model training
     X_train = X_train.fillna(0)
 
     # Step 5: Train model
-    config = DeltaSupplyConfig()
-    model = DeltaSupplyModel(config)
-    model.fit(X_train, y_up_train, y_down_train, y_large_train, y_mag_train)
+    config = SpikeRiskConfig()
+    model = SpikeRiskModel(config)
+    model.fit(X_train, y_spike_train, y_extreme_train, y_relative_train)
     logger.info("Model trained successfully.")
 
     # Step 6: Predict on test set
@@ -200,23 +196,12 @@ def main():
     pred_df["period"] = work.loc[test_mask, "period"].values
     pred_df["da_anchor"] = work.loc[test_mask, "da_anchor"].values
     pred_df["rt_actual"] = work.loc[test_mask, "rt_actual"].values
-    pred_df["price_delta"] = work.loc[test_mask, "price_delta"].values
-    pred_df["upward_deviation_label"] = work.loc[test_mask, "upward_deviation_label"].values
-    pred_df["downward_deviation_label"] = work.loc[test_mask, "downward_deviation_label"].values
-    pred_df["large_abs_deviation_label"] = work.loc[test_mask, "large_abs_deviation_label"].values
-    pred_df["deviation_magnitude_target"] = work.loc[test_mask, "deviation_magnitude_target"].values
-
-    # Also predict on full dataset for comprehensive output
-    X_all = work[feature_cols].fillna(0)
-    all_pred = model.predict(X_all)
-    all_pred_df = all_pred.df.copy()
-    all_pred_df["ds"] = work["ds"].values
-    all_pred_df["da_anchor"] = work["da_anchor"].values if "da_anchor" in work.columns else np.nan
-    all_pred_df["rt_actual"] = work["rt_actual"].values if "rt_actual" in work.columns else np.nan
-    all_pred_df["price_delta"] = work["price_delta"].values if "price_delta" in work.columns else np.nan
+    pred_df["spike_label"] = work.loc[test_mask, "spike_label"].values
+    pred_df["extreme_spike_label"] = work.loc[test_mask, "extreme_spike_label"].values
+    pred_df["relative_spike_label"] = work.loc[test_mask, "relative_spike_label"].values
 
     # Step 7: Save outputs
-    # model.pkl (using joblib via sklearn)
+    # model.pkl
     import pickle
     model_path = out_dir / "model.pkl"
     with open(model_path, "wb") as f:
@@ -226,18 +211,16 @@ def main():
     # config.yaml
     config_dict = {
         "thresholds": {
-            "upward": args.threshold_upward,
-            "downward": args.threshold_downward,
-            "abs_large": args.threshold_abs_large,
-            "clip": args.clip,
+            "spike": args.threshold_spike,
+            "extreme_spike": args.threshold_extreme_spike,
+            "relative_spike": args.threshold_relative_spike,
         },
         "mode": args.mode,
         "prob_threshold": config.prob_threshold,
         "hgb_max_iter": config.hgb_max_iter,
         "hgb_max_depth": config.hgb_max_depth,
         "hgb_learning_rate": config.hgb_learning_rate,
-        "ridge_alpha": config.ridge_alpha,
-        "magnitude_scale": config.magnitude_scale,
+        "risk_score_weights": config.risk_score_weights,
     }
     with open(out_dir / "config.yaml", "w") as f:
         yaml.dump(config_dict, f, default_flow_style=False)
@@ -247,10 +230,9 @@ def main():
         "n_features": len(feature_cols),
         "feature_columns": feature_cols,
         "missing_features": feature_result.audit.missing_features,
-        "forecast_feature_coverage": feature_result.audit.forecast_feature_coverage,
+        "derived_feature_coverage": feature_result.audit.derived_feature_coverage,
         "lag_feature_coverage": feature_result.audit.lag_feature_coverage,
         "calendar_feature_coverage": feature_result.audit.calendar_feature_coverage,
-        "sgdfnet_available": feature_result.audit.sgdfnet_available,
         "leakage_check": feature_result.audit.leakage_check,
         "verdict": feature_result.audit.verdict,
     }
@@ -269,16 +251,15 @@ def main():
         "feature_audit_verdict": feature_result.audit.verdict,
         "formal_metric": feature_result.audit.formal_ready,
         "thresholds": {
-            "upward": args.threshold_upward,
-            "downward": args.threshold_downward,
-            "abs_large": args.threshold_abs_large,
-            "clip": args.clip,
+            "spike": args.threshold_spike,
+            "extreme_spike": args.threshold_extreme_spike,
+            "relative_spike": args.threshold_relative_spike,
         },
-        "upward_rate_train": float(y_up_train[y_up_train >= 0].mean()) if (y_up_train >= 0).any() else 0,
-        "downward_rate_train": float(y_down_train[y_down_train >= 0].mean()) if (y_down_train >= 0).any() else 0,
-        "large_abs_rate_train": float(y_large_train[y_large_train >= 0].mean()) if (y_large_train >= 0).any() else 0,
-        "mean_delta_train": float(target_result.mean_delta),
-        "std_delta_train": float(target_result.std_delta),
+        "spike_rate_train": float(y_spike_train[y_spike_train >= 0].mean()) if (y_spike_train >= 0).any() else 0,
+        "extreme_spike_rate_train": float(y_extreme_train[y_extreme_train >= 0].mean()) if (y_extreme_train >= 0).any() else 0,
+        "relative_spike_rate_train": float(y_relative_train[y_relative_train >= 0].mean()) if (y_relative_train >= 0).any() else 0,
+        "mean_rt_train": float(target_result.mean_rt),
+        "std_rt_train": float(target_result.std_rt),
         "created_at": datetime.now().isoformat(),
         "mode": args.mode,
     }
@@ -294,60 +275,51 @@ def main():
     fi.to_csv(out_dir / "feature_importance.csv", index=False)
     logger.info("Saved feature importance to %s", out_dir / "feature_importance.csv")
 
-    # metrics_summary.json (basic training metrics)
+    # metrics_summary.json (classification metrics + canonical sMAPE)
     from sklearn.metrics import (
         precision_score, recall_score, f1_score, roc_auc_score,
-        mean_absolute_error, mean_squared_error,
     )
+    from models.deep_sgdf_delta.metrics import smape_floor50 as _smape_floor50
 
     # Test set metrics
-    test_labels_up = work.loc[test_mask, "upward_deviation_label"].values
-    test_labels_down = work.loc[test_mask, "downward_deviation_label"].values
-    test_labels_large = work.loc[test_mask, "large_abs_deviation_label"].values
-    test_mag = work.loc[test_mask, "deviation_magnitude_target"].values
+    test_labels_spike = work.loc[test_mask, "spike_label"].values
+    test_labels_extreme = work.loc[test_mask, "extreme_spike_label"].values
+    test_labels_relative = work.loc[test_mask, "relative_spike_label"].values
 
-    valid_up = test_labels_up >= 0
-    valid_down = test_labels_down >= 0
-    valid_large = test_labels_large >= 0
-    valid_mag = ~np.isnan(test_mag)
+    valid_spike = test_labels_spike >= 0
+    valid_extreme = test_labels_extreme >= 0
+    valid_relative = test_labels_relative >= 0
 
     metrics = {}
-    if valid_up.sum() > 0 and len(np.unique(test_labels_up[valid_up])) > 1:
-        up_pred = (pred_df.loc[valid_up, "upward_deviation_prob"].values >= 0.5).astype(int)
-        metrics["upward"] = {
-            "precision": float(precision_score(test_labels_up[valid_up], up_pred, zero_division=0)),
-            "recall": float(recall_score(test_labels_up[valid_up], up_pred, zero_division=0)),
-            "f1": float(f1_score(test_labels_up[valid_up], up_pred, zero_division=0)),
-            "roc_auc": float(roc_auc_score(test_labels_up[valid_up], pred_df.loc[valid_up, "upward_deviation_prob"].values)),
+
+    if valid_spike.sum() > 0 and len(np.unique(test_labels_spike[valid_spike])) > 1:
+        sp_pred = (pred_df.loc[valid_spike, "spike_prob"].values >= 0.5).astype(int)
+        metrics["spike"] = {
+            "precision": float(precision_score(test_labels_spike[valid_spike], sp_pred, zero_division=0)),
+            "recall": float(recall_score(test_labels_spike[valid_spike], sp_pred, zero_division=0)),
+            "f1": float(f1_score(test_labels_spike[valid_spike], sp_pred, zero_division=0)),
+            "roc_auc": float(roc_auc_score(test_labels_spike[valid_spike], pred_df.loc[valid_spike, "spike_prob"].values)),
         }
 
-    if valid_down.sum() > 0 and len(np.unique(test_labels_down[valid_down])) > 1:
-        down_pred = (pred_df.loc[valid_down, "downward_deviation_prob"].values >= 0.5).astype(int)
-        metrics["downward"] = {
-            "precision": float(precision_score(test_labels_down[valid_down], down_pred, zero_division=0)),
-            "recall": float(recall_score(test_labels_down[valid_down], down_pred, zero_division=0)),
-            "f1": float(f1_score(test_labels_down[valid_down], down_pred, zero_division=0)),
-            "roc_auc": float(roc_auc_score(test_labels_down[valid_down], pred_df.loc[valid_down, "downward_deviation_prob"].values)),
+    if valid_extreme.sum() > 0 and len(np.unique(test_labels_extreme[valid_extreme])) > 1:
+        ext_pred = (pred_df.loc[valid_extreme, "extreme_spike_prob"].values >= 0.5).astype(int)
+        metrics["extreme_spike"] = {
+            "precision": float(precision_score(test_labels_extreme[valid_extreme], ext_pred, zero_division=0)),
+            "recall": float(recall_score(test_labels_extreme[valid_extreme], ext_pred, zero_division=0)),
+            "f1": float(f1_score(test_labels_extreme[valid_extreme], ext_pred, zero_division=0)),
+            "roc_auc": float(roc_auc_score(test_labels_extreme[valid_extreme], pred_df.loc[valid_extreme, "extreme_spike_prob"].values)),
         }
 
-    if valid_large.sum() > 0 and len(np.unique(test_labels_large[valid_large])) > 1:
-        large_pred = (pred_df.loc[valid_large, "large_abs_deviation_prob"].values >= 0.5).astype(int)
-        metrics["large_abs"] = {
-            "precision": float(precision_score(test_labels_large[valid_large], large_pred, zero_division=0)),
-            "recall": float(recall_score(test_labels_large[valid_large], large_pred, zero_division=0)),
-            "f1": float(f1_score(test_labels_large[valid_large], large_pred, zero_division=0)),
-            "roc_auc": float(roc_auc_score(test_labels_large[valid_large], pred_df.loc[valid_large, "large_abs_deviation_prob"].values)),
-        }
-
-    if valid_mag.sum() > 0:
-        mag_pred = pred_df.loc[valid_mag, "deviation_magnitude_pred"].values
-        metrics["magnitude"] = {
-            "mae": float(mean_absolute_error(test_mag[valid_mag], mag_pred)),
-            "rmse": float(np.sqrt(mean_squared_error(test_mag[valid_mag], mag_pred))),
+    if valid_relative.sum() > 0 and len(np.unique(test_labels_relative[valid_relative])) > 1:
+        rel_pred = (pred_df.loc[valid_relative, "relative_spike_prob"].values >= 0.5).astype(int)
+        metrics["relative_spike"] = {
+            "precision": float(precision_score(test_labels_relative[valid_relative], rel_pred, zero_division=0)),
+            "recall": float(recall_score(test_labels_relative[valid_relative], rel_pred, zero_division=0)),
+            "f1": float(f1_score(test_labels_relative[valid_relative], rel_pred, zero_division=0)),
+            "roc_auc": float(roc_auc_score(test_labels_relative[valid_relative], pred_df.loc[valid_relative, "relative_spike_prob"].values)),
         }
 
     # DA anchor sMAPE on test set (using canonical formula)
-    from models.deep_sgdf_delta.metrics import smape_floor50 as _smape_floor50
     da_vals = work.loc[test_mask, "da_anchor"].values
     rt_vals = work.loc[test_mask, "rt_actual"].values
     valid_price = ~(np.isnan(da_vals) | np.isnan(rt_vals))

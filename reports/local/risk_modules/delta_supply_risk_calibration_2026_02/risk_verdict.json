@@ -1,0 +1,38 @@
+{
+  "directions": {
+    "upward": {
+      "verdict": "RISK_FEATURE_LOW_VALUE",
+      "lift_top10pct": 1.7647058823529411,
+      "recall_top20pct": 0.4235294117647059,
+      "calibration_monotonic": true,
+      "criteria": {
+        "go_lift_threshold": 2.0,
+        "go_recall_threshold": 0.4,
+        "low_value_lift_threshold": 1.3
+      }
+    },
+    "downward": {
+      "verdict": "RISK_FEATURE_GO",
+      "lift_top10pct": 2.5961538461538463,
+      "recall_top20pct": 0.5384615384615384,
+      "calibration_monotonic": true,
+      "criteria": {
+        "go_lift_threshold": 2.0,
+        "go_recall_threshold": 0.4,
+        "low_value_lift_threshold": 1.3
+      }
+    },
+    "large_abs": {
+      "verdict": "RISK_FEATURE_GO",
+      "lift_top10pct": 3.0172413793103448,
+      "recall_top20pct": 0.5172413793103449,
+      "calibration_monotonic": true,
+      "criteria": {
+        "go_lift_threshold": 2.0,
+        "go_recall_threshold": 0.4,
+        "low_value_lift_threshold": 1.3
+      }
+    }
+  },
+  "overall_verdict": "RISK_FEATURE_GO"
+}

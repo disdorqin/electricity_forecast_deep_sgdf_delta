@@ -1,0 +1,67 @@
+{
+  "timestamp": "2026-07-03T23:04:40.776278",
+  "risk_feature_version": "v1.0.0",
+  "mode": "online",
+  "metric_alignment_status": "PASS",
+  "n_rows": 672,
+  "columns": [
+    "business_day",
+    "hour_business",
+    "ds",
+    "deviation_up_prob",
+    "deviation_down_prob",
+    "deviation_large_abs_prob",
+    "deviation_risk_score",
+    "spike_prob",
+    "extreme_spike_prob",
+    "spike_risk_score",
+    "negative_prob",
+    "deep_negative_prob",
+    "negative_risk_score",
+    "risk_feature_version",
+    "metric_alignment_status"
+  ],
+  "column_types": {
+    "business_day": "datetime64[ns]",
+    "hour_business": "int64",
+    "ds": "object",
+    "deviation_up_prob": "float64",
+    "deviation_down_prob": "float64",
+    "deviation_large_abs_prob": "float64",
+    "deviation_risk_score": "float64",
+    "spike_prob": "float64",
+    "extreme_spike_prob": "float64",
+    "spike_risk_score": "float64",
+    "negative_prob": "float64",
+    "deep_negative_prob": "float64",
+    "negative_risk_score": "float64",
+    "risk_feature_version": "object",
+    "metric_alignment_status": "object"
+  },
+  "key_columns": [
+    "business_day",
+    "hour_business"
+  ],
+  "unique_keys": 672,
+  "missing_values": {
+    "business_day": 0,
+    "hour_business": 0,
+    "ds": 0,
+    "deviation_up_prob": 0,
+    "deviation_down_prob": 0,
+    "deviation_large_abs_prob": 0,
+    "deviation_risk_score": 0,
+    "spike_prob": 0,
+    "extreme_spike_prob": 0,
+    "spike_risk_score": 0,
+    "negative_prob": 0,
+    "deep_negative_prob": 0,
+    "negative_risk_score": 0,
+    "risk_feature_version": 0,
+    "metric_alignment_status": 0
+  },
+  "date_range": {
+    "start": "2026-01-31",
+    "end": "2026-02-28"
+  }
+}

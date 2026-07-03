@@ -1,0 +1,10 @@
+hgb_learning_rate: 0.1
+hgb_max_depth: 6
+hgb_max_iter: 200
+mode: FULL_DAY
+prob_threshold: 0.5
+risk_score_weights: null
+thresholds:
+  extreme_spike: 800.0
+  relative_spike: 200.0
+  spike: 500.0

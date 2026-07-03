@@ -1,0 +1,10 @@
+hgb_learning_rate: 0.1
+hgb_max_depth: 6
+hgb_max_iter: 200
+mode: FULL_DAY
+prob_threshold: 0.5
+risk_score_weights: null
+thresholds:
+  deep_negative: -100.0
+  negative: 0.0
+  relative_down: -200.0

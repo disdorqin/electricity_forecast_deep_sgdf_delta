@@ -1,0 +1,38 @@
+{
+  "target_month": "2026-02",
+  "n_train": 35087,
+  "n_val": 720,
+  "n_test": 672,
+  "feature_columns": [
+    "da_anchor",
+    "hour_sin",
+    "hour_cos",
+    "period_id",
+    "previous_day_price_delta_mean",
+    "previous_day_price_delta_std",
+    "lagged_price_delta_24h",
+    "lagged_price_delta_48h"
+  ],
+  "n_features": 8,
+  "missing_features": [
+    "forecast_net_load",
+    "forecast_renewable_share",
+    "forecast_supply_demand_gap",
+    "forecast_bidding_pressure",
+    "forecast_thermal_pressure"
+  ],
+  "feature_audit_verdict": "PARTIAL_READY",
+  "formal_metric": false,
+  "thresholds": {
+    "spike": 500.0,
+    "extreme_spike": 800.0,
+    "relative_spike": 200.0
+  },
+  "spike_rate_train": 0.14503947330920283,
+  "extreme_spike_rate_train": 0.018781885028643086,
+  "relative_spike_rate_train": 0.03630974434975917,
+  "mean_rt_train": 324.49796396575954,
+  "std_rt_train": 222.18866154014455,
+  "created_at": "2026-07-03T23:03:21.942411",
+  "mode": "FULL_DAY"
+}
