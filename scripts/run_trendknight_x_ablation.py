@@ -133,6 +133,9 @@ def parse_args() -> argparse.Namespace:
                         help="Override runtime profile for v3 candidates")
     parser.add_argument("--teachers", type=str, nargs="*", default=None,
                         help="Teacher names to enable (default: all available)")
+    parser.add_argument("--include-candidates", type=str, default=None,
+                        help="Comma-separated candidate names to run (default: all). "
+                             "E.g. sgdfnet_baseline,v3_multiscale_tcn,v3_teacher_residual")
     return parser.parse_args()
 
 
@@ -201,6 +204,10 @@ def build_ground_truth(
     if ts_col is None:
         raise ValueError("Cannot find timestamp column in raw data")
     df[ts_col] = pd.to_datetime(df[ts_col])
+    # Normalise column name for downstream SGDFNet functions
+    if ts_col != "timestamp":
+        df = df.rename(columns={ts_col: "timestamp"})
+    ts_col = "timestamp"
 
     if "business_day" not in df.columns:
         if _SGDFNET_AVAILABLE:
@@ -446,6 +453,7 @@ def train_and_predict_v2(
 ) -> tuple[pd.DataFrame | None, dict, Any]:
     import torch
     from models.deep_sgdf_delta.train_v2 import TrainV2Config, train_model_v2
+    from models.deep_sgdf_delta.dataset_v2 import DEFAULT_FEATURE_CONFIG
 
     t_start = time.time()
     info: dict[str, Any] = {"type": "v2_day_tcn"}
@@ -467,7 +475,7 @@ def train_and_predict_v2(
 
         logger.info("Training V2 day TCN (decision_day=%s) ...", start_date.date())
         result = train_model_v2(
-            raw_df, None, train_config,
+            raw_df, DEFAULT_FEATURE_CONFIG, train_config,
             decision_day=start_date, fast_dev_run=fast_dev_run,
         )
         model = result["model"]
@@ -534,6 +542,7 @@ def train_and_predict_v3(
 ) -> tuple[pd.DataFrame | None, dict]:
     import torch
     from models.deep_sgdf_delta.train_v3 import TrainV3Config, train_model_v3
+    from models.deep_sgdf_delta.dataset_v2 import DEFAULT_FEATURE_CONFIG
     from models.deep_sgdf_delta.runtime_profiles import get_profile, PROFILES
 
     t_start = time.time()
@@ -579,7 +588,7 @@ def train_and_predict_v3(
         logger.info("Training V3 [%s] (decision_day=%s) ...",
                      profile_name or "default", start_date.date())
         result = train_model_v3(
-            raw_df, train_config,
+            raw_df, DEFAULT_FEATURE_CONFIG, train_config,
             decision_day=start_date, fast_dev_run=fast_dev_run,
         )
         model = result["model"]
@@ -1004,6 +1013,14 @@ def main() -> None:
     logger.info("  Profile     : %s", args.profile or "auto")
     logger.info("  Teachers    : %s", args.teachers or "all available")
 
+    # Parse include-candidates filter
+    if args.include_candidates:
+        include_candidates = set(args.include_candidates.split(","))
+        logger.info("  Candidates  : %s (filtered)", include_candidates)
+    else:
+        include_candidates = None
+        logger.info("  Candidates  : all")
+
     # SGDFNet
     sgdfnet_ok = _try_import_sgdfnet(args.sgdfnet_root)
     if sgdfnet_ok:
@@ -1024,114 +1041,139 @@ def main() -> None:
     # ── Collect candidates ───────────────────────────────────────────
     all_results: list[dict[str, Any]] = []
 
+    def _should_run(name: str) -> bool:
+        return include_candidates is None or name in include_candidates
+
     # 1. SGDFNet baseline
-    logger.info("-" * 60)
-    logger.info("[1/7] sgdfnet_baseline")
-    logger.info("-" * 60)
-    baseline_result = build_sgdfnet_baseline_candidate(raw_df, gt_df, start_date, end_date)
-    baseline_result["runtime_seconds"] = 0
-    all_results.append(baseline_result)
-    logger.info("  overall_sMAPE = %s", baseline_result["overall_sMAPE_floor50"])
+    if _should_run("sgdfnet_baseline"):
+        logger.info("-" * 60)
+        logger.info("[1/7] sgdfnet_baseline")
+        logger.info("-" * 60)
+        baseline_result = build_sgdfnet_baseline_candidate(raw_df, gt_df, start_date, end_date)
+        baseline_result["runtime_seconds"] = 0
+        all_results.append(baseline_result)
+        logger.info("  overall_sMAPE = %s", baseline_result["overall_sMAPE_floor50"])
+    else:
+        logger.info("[1/7] sgdfnet_baseline -- SKIPPED")
 
     # 2. V2 day TCN
-    logger.info("-" * 60)
-    logger.info("[2/7] v2_day_tcn")
-    logger.info("-" * 60)
-    v2_pred, v2_info, v2_model = train_and_predict_v2(
-        raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
-    )
-    if v2_pred is not None:
-        m = evaluate_candidate_full(v2_pred, gt_df, "v2_day_tcn")
-        m["runtime_seconds"] = v2_info.get("runtime_seconds", 0)
-        m["total_params"] = v2_info.get("total_params", 0)
-        m["num_predictions"] = v2_info.get("num_predictions", 0)
-        m["best_val_smape"] = v2_info.get("best_val_smape", float("nan"))
-        all_results.append(m)
-        logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+    v2_pred, v2_info, v2_model = None, {}, None
+    if _should_run("v2_day_tcn"):
+        logger.info("-" * 60)
+        logger.info("[2/7] v2_day_tcn")
+        logger.info("-" * 60)
+        v2_pred, v2_info, v2_model = train_and_predict_v2(
+            raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
+        )
+        if v2_pred is not None:
+            m = evaluate_candidate_full(v2_pred, gt_df, "v2_day_tcn")
+            m["runtime_seconds"] = v2_info.get("runtime_seconds", 0)
+            m["total_params"] = v2_info.get("total_params", 0)
+            m["num_predictions"] = v2_info.get("num_predictions", 0)
+            m["best_val_smape"] = v2_info.get("best_val_smape", float("nan"))
+            all_results.append(m)
+            logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+        else:
+            logger.warning("v2_day_tcn: no predictions produced")
+            all_results.append({**_empty_result("v2_day_tcn"), **v2_info})
     else:
-        logger.warning("v2_day_tcn: no predictions produced")
-        all_results.append({**_empty_result("v2_day_tcn"), **v2_info})
+        logger.info("[2/7] v2_day_tcn -- SKIPPED")
 
     # 3. V2 residual SGDFNet
-    logger.info("-" * 60)
-    logger.info("[3/7] v2_residual_sgdfnet")
-    logger.info("-" * 60)
-    if v2_pred is not None:
-        v2_res_result = build_v2_residual_candidate(v2_pred, raw_df, gt_df, start_date, end_date)
-        v2_res_result["runtime_seconds"] = v2_info.get("runtime_seconds", 0) + 1.0
-        all_results.append(v2_res_result)
-        logger.info("  overall_sMAPE = %s", v2_res_result["overall_sMAPE_floor50"])
+    if _should_run("v2_residual_sgdfnet"):
+        logger.info("-" * 60)
+        logger.info("[3/7] v2_residual_sgdfnet")
+        logger.info("-" * 60)
+        if v2_pred is not None:
+            v2_res_result = build_v2_residual_candidate(v2_pred, raw_df, gt_df, start_date, end_date)
+            v2_res_result["runtime_seconds"] = v2_info.get("runtime_seconds", 0) + 1.0
+            all_results.append(v2_res_result)
+            logger.info("  overall_sMAPE = %s", v2_res_result["overall_sMAPE_floor50"])
+        else:
+            logger.warning("v2_residual_sgdfnet: skipped (no v2 predictions)")
+            all_results.append({**_empty_result("v2_residual_sgdfnet"), "error": "no v2 predictions"})
     else:
-        logger.warning("v2_residual_sgdfnet: skipped (no v2 predictions)")
-        all_results.append({**_empty_result("v2_residual_sgdfnet"), "error": "no v2 predictions"})
+        logger.info("[3/7] v2_residual_sgdfnet -- SKIPPED")
 
     # 4. V3 fast TCN (no multiscale, no teacher)
-    logger.info("-" * 60)
-    logger.info("[4/7] v3_fast_tcn")
-    logger.info("-" * 60)
-    v3_fast_pred, v3_fast_info = train_and_predict_v3(
-        raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
-        profile_name="v3_fast_tcn",
-    )
-    if v3_fast_pred is not None:
-        m = evaluate_candidate_full(v3_fast_pred, gt_df, "v3_fast_tcn")
-        m.update({k: v for k, v in v3_fast_info.items() if k not in m})
-        all_results.append(m)
-        logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+    if _should_run("v3_fast_tcn"):
+        logger.info("-" * 60)
+        logger.info("[4/7] v3_fast_tcn")
+        logger.info("-" * 60)
+        v3_fast_pred, v3_fast_info = train_and_predict_v3(
+            raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
+            profile_name="v3_fast_tcn",
+        )
+        if v3_fast_pred is not None:
+            m = evaluate_candidate_full(v3_fast_pred, gt_df, "v3_fast_tcn")
+            m.update({k: v for k, v in v3_fast_info.items() if k not in m})
+            all_results.append(m)
+            logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+        else:
+            logger.warning("v3_fast_tcn: no predictions produced")
+            all_results.append({**_empty_result("v3_fast_tcn"), **v3_fast_info})
     else:
-        logger.warning("v3_fast_tcn: no predictions produced")
-        all_results.append({**_empty_result("v3_fast_tcn"), **v3_fast_info})
+        logger.info("[4/7] v3_fast_tcn -- SKIPPED")
 
     # 5. V3 multiscale TCN
-    logger.info("-" * 60)
-    logger.info("[5/7] v3_multiscale_tcn")
-    logger.info("-" * 60)
-    v3_ms_pred, v3_ms_info = train_and_predict_v3(
-        raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
-        profile_name="v3_multiscale_tcn",
-    )
-    if v3_ms_pred is not None:
-        m = evaluate_candidate_full(v3_ms_pred, gt_df, "v3_multiscale_tcn")
-        m.update({k: v for k, v in v3_ms_info.items() if k not in m})
-        all_results.append(m)
-        logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+    if _should_run("v3_multiscale_tcn"):
+        logger.info("-" * 60)
+        logger.info("[5/7] v3_multiscale_tcn")
+        logger.info("-" * 60)
+        v3_ms_pred, v3_ms_info = train_and_predict_v3(
+            raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
+            profile_name="v3_multiscale_tcn",
+        )
+        if v3_ms_pred is not None:
+            m = evaluate_candidate_full(v3_ms_pred, gt_df, "v3_multiscale_tcn")
+            m.update({k: v for k, v in v3_ms_info.items() if k not in m})
+            all_results.append(m)
+            logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+        else:
+            logger.warning("v3_multiscale_tcn: no predictions produced")
+            all_results.append({**_empty_result("v3_multiscale_tcn"), **v3_ms_info})
     else:
-        logger.warning("v3_multiscale_tcn: no predictions produced")
-        all_results.append({**_empty_result("v3_multiscale_tcn"), **v3_ms_info})
+        logger.info("[5/7] v3_multiscale_tcn -- SKIPPED")
 
     # 6. V3 teacher residual
-    logger.info("-" * 60)
-    logger.info("[6/7] v3_teacher_residual")
-    logger.info("-" * 60)
-    v3_tr_pred, v3_tr_info = train_and_predict_v3(
-        raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
-        profile_name="v3_teacher_residual", teachers=args.teachers,
-    )
-    if v3_tr_pred is not None:
-        m = evaluate_candidate_full(v3_tr_pred, gt_df, "v3_teacher_residual")
-        m.update({k: v for k, v in v3_tr_info.items() if k not in m})
-        all_results.append(m)
-        logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+    if _should_run("v3_teacher_residual"):
+        logger.info("-" * 60)
+        logger.info("[6/7] v3_teacher_residual")
+        logger.info("-" * 60)
+        v3_tr_pred, v3_tr_info = train_and_predict_v3(
+            raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
+            profile_name="v3_teacher_residual", teachers=args.teachers,
+        )
+        if v3_tr_pred is not None:
+            m = evaluate_candidate_full(v3_tr_pred, gt_df, "v3_teacher_residual")
+            m.update({k: v for k, v in v3_tr_info.items() if k not in m})
+            all_results.append(m)
+            logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+        else:
+            logger.warning("v3_teacher_residual: no predictions produced")
+            all_results.append({**_empty_result("v3_teacher_residual"), **v3_tr_info})
     else:
-        logger.warning("v3_teacher_residual: no predictions produced")
-        all_results.append({**_empty_result("v3_teacher_residual"), **v3_tr_info})
+        logger.info("[6/7] v3_teacher_residual -- SKIPPED")
 
     # 7. V3 teacher MoE
-    logger.info("-" * 60)
-    logger.info("[7/7] v3_teacher_moe")
-    logger.info("-" * 60)
-    v3_moe_pred, v3_moe_info = train_and_predict_v3(
-        raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
-        profile_name="v3_teacher_moe", teachers=args.teachers,
-    )
-    if v3_moe_pred is not None:
-        m = evaluate_candidate_full(v3_moe_pred, gt_df, "v3_teacher_moe")
-        m.update({k: v for k, v in v3_moe_info.items() if k not in m})
-        all_results.append(m)
-        logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+    if _should_run("v3_teacher_moe"):
+        logger.info("-" * 60)
+        logger.info("[7/7] v3_teacher_moe")
+        logger.info("-" * 60)
+        v3_moe_pred, v3_moe_info = train_and_predict_v3(
+            raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
+            profile_name="v3_teacher_moe", teachers=args.teachers,
+        )
+        if v3_moe_pred is not None:
+            m = evaluate_candidate_full(v3_moe_pred, gt_df, "v3_teacher_moe")
+            m.update({k: v for k, v in v3_moe_info.items() if k not in m})
+            all_results.append(m)
+            logger.info("  overall_sMAPE = %.4f", m["overall_sMAPE_floor50"])
+        else:
+            logger.warning("v3_teacher_moe: no predictions produced")
+            all_results.append({**_empty_result("v3_teacher_moe"), **v3_moe_info})
     else:
-        logger.warning("v3_teacher_moe: no predictions produced")
-        all_results.append({**_empty_result("v3_teacher_moe"), **v3_moe_info})
+        logger.info("[7/7] v3_teacher_moe -- SKIPPED")
 
     # ── Build leaderboard ────────────────────────────────────────────
     logger.info("=" * 60)

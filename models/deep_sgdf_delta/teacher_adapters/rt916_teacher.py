@@ -19,11 +19,15 @@ def check_availability(source_repo_root: Optional[str] = None) -> str:
         base = Path(source_repo_root)
     else:
         base = Path(__file__).resolve().parent.parent.parent.parent / "electricity_forecast_model2.0_exp"
-    
-    # Check for RT916 output directories
-    rt_outputs = base / "outputs" / "RT916_SpikeMarketLab"
-    if rt_outputs.is_dir():
-        return "available"
+
+    # Only model_packages contains actual RT916 predictions;
+    # cutoff_recovery_experiments contains SGDFNet files — do NOT count it.
+    for sub in ["model_packages", ""]:
+        d = base / "outputs" / "RT916_SpikeMarketLab" / sub if sub else base / "outputs" / "rt916"
+        if d.is_dir():
+            for pat in ("预测结果*.csv", "*fused*.csv", "predictions_rt*.csv"):
+                if any(d.rglob(pat)):
+                    return "available"
     return "missing_checkpoint"
 
 def load_predictions(
@@ -37,30 +41,48 @@ def load_predictions(
         base = Path(source_repo_root)
     else:
         base = Path(__file__).resolve().parent.parent.parent.parent / "electricity_forecast_model2.0_exp"
-    
+
     candidates = []
     if experiment_dir:
         candidates.append(Path(experiment_dir))
-    
-    # Search common RT916 output locations
+
+    # Search model_packages/ for actual RT916 predictions.
+    # DO NOT search cutoff_recovery_experiments/ — those are SGDFNet files.
     for pattern_dir in [
-        base / "outputs" / "RT916_SpikeMarketLab",
+        base / "outputs" / "RT916_SpikeMarketLab" / "model_packages",
         base / "outputs" / "rt916",
     ]:
         if pattern_dir.is_dir():
-            for csv_file in pattern_dir.rglob("predictions*.csv"):
+            # RT916 files: 预测结果*.csv (Chinese) or predictions_rt*.csv
+            for csv_file in pattern_dir.rglob("预测结果*.csv"):
+                candidates.append(csv_file)
+            for csv_file in pattern_dir.rglob("predictions_rt*.csv"):
                 candidates.append(csv_file)
             for csv_file in pattern_dir.rglob("*fused*.csv"):
                 candidates.append(csv_file)
-    
+
+    # Prefer the file with the most rows (best coverage)
+    candidates.sort(reverse=True)
+
+    best_result = None
+    best_count = 0
     for pred_path in candidates:
         if pred_path.exists() and pred_path.is_file():
-            try:
-                df = pd.read_csv(pred_path, encoding="utf-8-sig")
-                return _standardize(df, start_date, end_date)
-            except Exception as exc:
-                logger.warning("Failed to load RT916 predictions from %s: %s", pred_path, exc)
-    
+            for enc in ("utf-8-sig", "gbk"):
+                try:
+                    df = pd.read_csv(pred_path, encoding=enc)
+                    result = _standardize(df, start_date, end_date)
+                    if result is not None and len(result) > best_count:
+                        best_result = result
+                        best_count = len(result)
+                        logger.info("RT916 candidate: %s (%d rows, enc=%s)", pred_path.name, len(result), enc)
+                except Exception as exc:
+                    logger.warning("Failed to load RT916 predictions from %s (enc=%s): %s", pred_path, enc, exc)
+
+    if best_result is not None and best_count > 0:
+        logger.info("Selected RT916 predictions with %d rows", best_count)
+        return best_result
+
     logger.info("RT916 predictions not found — teacher will be marked unavailable")
     return None
 
@@ -68,8 +90,9 @@ def _standardize(df: pd.DataFrame, start_date: Optional[str], end_date: Optional
     """Standardize RT916 output to teacher format."""
     result = df.copy()
     
-    # Map prediction column
-    for c in ("rt_pred", "y_pred", "rt_hat", "forecast", "prediction"):
+    # Map prediction column (include Chinese names from RT916 output)
+    for c in ("rt_pred", "y_pred", "rt_hat", "forecast", "prediction",
+              "预测实时电价"):
         if c in result.columns:
             result["teacher_pred"] = result[c]
             break
