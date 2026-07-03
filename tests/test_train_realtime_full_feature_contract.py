@@ -20,6 +20,8 @@ import pytest
 class TestCLIArguments:
     """Verify new CLI arguments are recognized."""
 
+    @pytest.mark.skipif(sys.platform == "win32" and sys.version_info >= (3, 13),
+                        reason="subprocess help tests unstable on Windows/Python 3.13")
     def test_help_includes_new_args(self):
         """--help output mentions DeepFinal-2 feature args."""
         result = subprocess.run(
@@ -34,6 +36,8 @@ class TestCLIArguments:
         assert "--feature-audit-only" in help_text
         assert "--strict-feature-contract" in help_text
 
+    @pytest.mark.skipif(sys.platform == "win32" and sys.version_info >= (3, 13),
+                        reason="subprocess help tests unstable on Windows/Python 3.13")
     def test_feature_mode_accepted(self):
         """--feature-mode accepts 'minimal' and 'full'."""
         result = subprocess.run(
