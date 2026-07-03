@@ -350,6 +350,8 @@ def build_training_datasets_v3(
     train_min_days: int = 90,
     teacher_pred_df: pd.DataFrame | None = None,
     num_teachers: int = 3,
+    teacher_names: list[str] | None = None,
+    rt916_scope_config=None,
 ) -> tuple[DaySequenceDatasetV3, DaySequenceDatasetV3, list[str]]:
     """Build train and val DaySequenceDatasetV3 for a single decision day.
 
@@ -361,6 +363,8 @@ def build_training_datasets_v3(
         train_min_days: Minimum training days required
         teacher_pred_df: Optional teacher predictions DataFrame
         num_teachers: Number of teacher slots
+        teacher_names: Names of teachers (e.g., ["sgdfnet", "rt916", "timemixer"])
+        rt916_scope_config: Optional RT916ScopeConfig for local teacher restriction
 
     Returns:
         (train_ds, val_ds, feature_cols)
@@ -406,6 +410,48 @@ def build_training_datasets_v3(
         all_tp, all_tm = _align_teacher_predictions(
             teacher_pred_df, all_days, num_teachers,
         )
+
+        # Apply RT916 scope restriction (Phase 5 Task C)
+        if rt916_scope_config is not None and teacher_names is not None:
+            from .rt916_scope import apply_rt916_scope
+
+            rt916_idx = teacher_names.index("rt916") if "rt916" in teacher_names else -1
+            if rt916_idx >= 0:
+                # Build context arrays from frame for scope computation
+                all_day_set = set(all_days)
+                context_rows = []
+                for bd in all_days:
+                    day_frame = frame[frame["business_day"] == bd]
+                    day_rt = np.zeros(24, dtype=np.float32)
+                    day_seg = np.zeros(24, dtype=np.int64)
+                    day_delta = np.zeros(24, dtype=np.float32)
+                    day_da = np.zeros(24, dtype=np.float32)
+                    for _, r in day_frame.iterrows():
+                        h = int(r.get("target_hour", 0)) - 1
+                        if 0 <= h < 24:
+                            day_rt[h] = float(r.get("rt_actual", 0.0))
+                            day_seg[h] = int(r.get("segment_id", 0))
+                            day_delta[h] = float(r.get("delta_target", 0.0))
+                            day_da[h] = float(r.get("da_anchor", 0.0))
+                    context_rows.append((day_rt, day_seg, day_delta, day_da))
+
+                if context_rows:
+                    ctx_rt = np.stack([r[0] for r in context_rows])
+                    ctx_seg = np.stack([r[1] for r in context_rows])
+                    ctx_delta = np.stack([r[2] for r in context_rows])
+                    ctx_da = np.stack([r[3] for r in context_rows])
+
+                    # SGDFNet predictions (teacher index 0)
+                    sgd_pred = all_tp[:, 0, :] if num_teachers > 0 else None
+
+                    all_tp, all_tm, scope_stats = apply_rt916_scope(
+                        all_tp, all_tm, teacher_names, rt916_idx,
+                        rt_actual=ctx_rt, segment_ids=ctx_seg,
+                        delta_true=ctx_delta,
+                        sgdfnet_pred=sgd_pred, da_anchor=ctx_da,
+                        config=rt916_scope_config,
+                    )
+                    logger.info("RT916 scope stats: %s", scope_stats)
 
         day_to_all_idx = {d: i for i, d in enumerate(all_days)}
 

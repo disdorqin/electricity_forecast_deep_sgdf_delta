@@ -15,9 +15,13 @@ Default weights:
 """
 from __future__ import annotations
 
+import logging
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+logger = logging.getLogger(__name__)
 
 
 class SMAPEFloor50Loss(nn.Module):
@@ -76,10 +80,12 @@ class TeacherResidualDistillLoss(nn.Module):
     """MSE between student residual and teacher residual, only where teacher is available.
 
     student_residual = delta_true - delta_pred_student
-    teacher_residual = delta_true - delta_pred_teacher
+    teacher_residual = delta_true - teacher_pred
 
-    The student is encouraged to learn whatever the teacher already captures,
-    so that the ensemble (teacher + student residual) improves.
+    NaN safety: only computes on hours where ALL of:
+      teacher_mask==1, teacher_pred finite, delta_true finite,
+      delta_pred_student finite, valid_mask (if given).
+    If no valid hours remain, returns 0.
     """
 
     def __init__(self, eps: float = 1e-8):
@@ -92,40 +98,48 @@ class TeacherResidualDistillLoss(nn.Module):
         delta_true: torch.Tensor,            # [B, 24]
         teacher_pred: torch.Tensor,          # [B, num_teachers, 24]
         teacher_mask: torch.Tensor | None,   # [B, num_teachers]
+        valid_mask: torch.Tensor | None = None,  # [B, 24]
     ) -> torch.Tensor:
-        """Compute distillation loss.
-
-        For each available teacher, compute MSE between:
-          student_residual = delta_true - delta_pred_student
-          teacher_residual = delta_true - teacher_pred
-
-        Only compute where teacher_mask == 1.
-        """
+        """Compute distillation loss with NaN safety."""
+        device = delta_pred_student.device
         if teacher_mask is None or teacher_mask.sum() == 0:
-            return torch.tensor(0.0, device=delta_pred_student.device)
+            return torch.tensor(0.0, device=device)
+
+        # Base finite mask: delta_true and delta_pred_student must be finite
+        finite_base = torch.isfinite(delta_true) & torch.isfinite(delta_pred_student)  # [B, 24]
+        if valid_mask is not None:
+            finite_base = finite_base & valid_mask.bool()
 
         student_residual = delta_true - delta_pred_student          # [B, 24]
 
-        total_loss = torch.tensor(0.0, device=delta_pred_student.device)
+        total_loss = torch.tensor(0.0, device=device)
         count = 0
 
         for t_idx in range(teacher_pred.size(1)):
-            # Mask for this teacher: [B]
             t_available = teacher_mask[:, t_idx]                    # [B]
             if t_available.sum() == 0:
                 continue
 
-            teacher_residual = delta_true - teacher_pred[:, t_idx, :]  # [B, 24]
+            # Teacher predictions must be finite
+            t_finite = torch.isfinite(teacher_pred[:, t_idx, :])    # [B, 24]
+            t_avail_bool = t_available.bool().unsqueeze(-1)          # [B, 1]
+            hour_mask = finite_base & t_finite & t_avail_bool       # [B, 24]
 
-            # MSE only where teacher is available
+            n_valid = hour_mask.sum().item()
+            if n_valid == 0:
+                continue
+
+            teacher_residual = delta_true - teacher_pred[:, t_idx, :]  # [B, 24]
+            # Sanitize: replace NaN in teacher_residual with 0 before diff
+            teacher_residual = torch.where(torch.isfinite(teacher_residual), teacher_residual, torch.zeros_like(teacher_residual))
             diff = (student_residual - teacher_residual) ** 2       # [B, 24]
-            # Mask by teacher availability (broadcast over 24 hours)
-            masked_diff = diff * t_available.unsqueeze(-1)          # [B, 24]
+            # Use torch.where instead of multiplication to avoid NaN * 0 = NaN
+            masked_diff = torch.where(hour_mask, diff, torch.zeros_like(diff))  # [B, 24]
             total_loss = total_loss + masked_diff.sum()
-            count += t_available.sum().item() * diff.size(1)
+            count += n_valid
 
         if count == 0:
-            return torch.tensor(0.0, device=delta_pred_student.device)
+            return torch.tensor(0.0, device=device)
 
         return total_loss / count
 
@@ -169,6 +183,14 @@ class ConfidenceCalibrationLoss(nn.Module):
         return loss.sum() / denom
 
 
+def _safe_loss(value: torch.Tensor, name: str) -> torch.Tensor:
+    """Return value if finite, else 0.0 with warning."""
+    if torch.isfinite(value):
+        return value
+    logger.warning("Loss '%s' is non-finite (%.4g), setting to 0", name, value.item())
+    return torch.tensor(0.0, device=value.device, dtype=value.dtype)
+
+
 class CombinedLossV3(nn.Module):
     """Configurable weighted combination of all V3 loss components.
 
@@ -179,6 +201,9 @@ class CombinedLossV3(nn.Module):
     + 0.10 * smoothness
     + 0.10 * teacher_distill
     + 0.05 * confidence_calibration
+
+    All components are checked with torch.isfinite before summing.
+    Non-finite components are logged and set to 0.
     """
 
     def __init__(
@@ -222,6 +247,7 @@ class CombinedLossV3(nn.Module):
         """Compute combined V3 loss on 24-hour predictions.
 
         Returns dict with individual losses and total.
+        All components are checked for finiteness before summing.
         """
         device = rt_pred_24.device
 
@@ -251,35 +277,40 @@ class CombinedLossV3(nn.Module):
             }
 
         # 1. sMAPE
-        losses["smape"] = self.smape_loss(rt_pred_flat, rt_true_flat)
+        losses["smape"] = _safe_loss(self.smape_loss(rt_pred_flat, rt_true_flat), "smape")
 
         # 2. Delta MAE
-        losses["delta_mae"] = self.delta_mae_loss(delta_pred_flat, delta_true_flat)
+        losses["delta_mae"] = _safe_loss(self.delta_mae_loss(delta_pred_flat, delta_true_flat), "delta_mae")
 
         # 3. Period 9-16 weighted
-        losses["period"] = self.period_loss(delta_pred_flat, delta_true_flat, seg_flat)
+        losses["period"] = _safe_loss(self.period_loss(delta_pred_flat, delta_true_flat, seg_flat), "period")
 
         # 4. Smoothness (on full 24h sequence)
         if valid_mask is not None:
             masked_delta = delta_pred_24 * valid_mask
-            losses["smooth"] = self.smooth_loss(masked_delta)
+            losses["smooth"] = _safe_loss(self.smooth_loss(masked_delta), "smooth")
         else:
-            losses["smooth"] = self.smooth_loss(delta_pred_24)
+            losses["smooth"] = _safe_loss(self.smooth_loss(delta_pred_24), "smooth")
 
-        # 5. Teacher distillation
+        # 5. Teacher distillation (with NaN safety inside)
         if teacher_pred is not None and teacher_mask is not None:
-            losses["teacher_distill"] = self.teacher_distill_loss(
-                delta_pred_24, delta_true_24, teacher_pred, teacher_mask,
+            losses["teacher_distill"] = _safe_loss(
+                self.teacher_distill_loss(
+                    delta_pred_24, delta_true_24, teacher_pred, teacher_mask,
+                    valid_mask=valid_mask,
+                ),
+                "teacher_distill",
             )
         else:
             losses["teacher_distill"] = torch.tensor(0.0, device=device)
 
         # 6. Confidence calibration
-        losses["confidence_cal"] = self.confidence_cal_loss(
-            confidence_24, delta_pred_24, delta_true_24, valid_mask,
+        losses["confidence_cal"] = _safe_loss(
+            self.confidence_cal_loss(confidence_24, delta_pred_24, delta_true_24, valid_mask),
+            "confidence_cal",
         )
 
-        # Total
+        # Total — all components are guaranteed finite at this point
         losses["total"] = (
             self.w_smape * losses["smape"]
             + self.w_delta_mae * losses["delta_mae"]

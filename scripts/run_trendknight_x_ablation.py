@@ -136,6 +136,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-candidates", type=str, default=None,
                         help="Comma-separated candidate names to run (default: all). "
                              "E.g. sgdfnet_baseline,v3_multiscale_tcn,v3_teacher_residual")
+    parser.add_argument("--sgdfnet-predictions", type=str, default=None,
+                        help="Path to SGDFNet predictions CSV for baseline comparison")
+    parser.add_argument("--baseline-source", type=str, default="teacher",
+                        choices=["teacher", "p0", "file"],
+                        help="Source for SGDFNet baseline: "
+                             "teacher=sgdfnet_teacher adapter, "
+                             "p0=p0_reproduce_sgdfnet_baseline output, "
+                             "file=--sgdfnet-predictions path")
+    parser.add_argument("--rt916-scope", type=str, default="local",
+                        choices=["disabled", "local", "full"],
+                        help="RT916 teacher scope: "
+                             "disabled=no RT916 teacher, "
+                             "local=only high-volatility hours (default), "
+                             "full=use RT916 everywhere (Phase 4 behavior)")
     return parser.parse_args()
 
 
@@ -539,6 +553,7 @@ def train_and_predict_v3(
     device_str: str, amp: bool, fast_dev_run: bool,
     profile_name: str | None = None,
     teachers: list[str] | None = None,
+    rt916_scope_config=None,
 ) -> tuple[pd.DataFrame | None, dict]:
     import torch
     from models.deep_sgdf_delta.train_v3 import TrainV3Config, train_model_v3
@@ -590,6 +605,8 @@ def train_and_predict_v3(
         result = train_model_v3(
             raw_df, DEFAULT_FEATURE_CONFIG, train_config,
             decision_day=start_date, fast_dev_run=fast_dev_run,
+            teacher_names=teachers,
+            rt916_scope_config=rt916_scope_config,
         )
         model = result["model"]
         info["best_val_smape"] = result["best_val_smape"]
@@ -614,76 +631,206 @@ def train_and_predict_v3(
         return None, info
 
 
-# ── SGDFNet baseline ─────────────────────────────────────────────────
+# ── SGDFNet baseline (real predictions only) ─────────────────────────
+
+def _load_sgdfnet_predictions_real(
+    source_repo_root: str | None,
+    sgdfnet_root: str | None,
+    start_date: str,
+    end_date: str,
+    baseline_source: str,
+    sgdfnet_predictions_path: str | None,
+) -> pd.DataFrame | None:
+    """Load real SGDFNet predictions from the specified source.
+
+    Returns standardized DataFrame with columns:
+      business_day, hour, rt_pred, da_anchor
+    Or None if not available.
+    """
+    # ── Source: file ──────────────────────────────────────────────────
+    if baseline_source == "file":
+        if not sgdfnet_predictions_path:
+            logger.error("--baseline-source=file requires --sgdfnet-predictions")
+            return None
+        p = Path(sgdfnet_predictions_path)
+        if not p.exists():
+            logger.error("SGDFNet predictions file not found: %s", p)
+            return None
+        for enc in ("utf-8-sig", "gbk"):
+            try:
+                df = pd.read_csv(p, encoding=enc)
+                return _standardize_sgdfnet_predictions(df, start_date, end_date)
+            except Exception as exc:
+                logger.warning("Failed to read %s (enc=%s): %s", p, enc, exc)
+        return None
+
+    # ── Source: p0 ────────────────────────────────────────────────────
+    if baseline_source == "p0":
+        # Look for p0_reproduce_sgdfnet_baseline output
+        p0_dirs = [
+            PROJECT_ROOT / "reports" / "local" / "p0",
+            PROJECT_ROOT / "outputs" / "p0",
+        ]
+        if source_repo_root:
+            p0_dirs.append(Path(source_repo_root) / "outputs" / "p0")
+        for d in p0_dirs:
+            pred_file = d / "predictions.csv"
+            if pred_file.exists():
+                try:
+                    df = pd.read_csv(pred_file, encoding="utf-8-sig")
+                    result = _standardize_sgdfnet_predictions(df, start_date, end_date)
+                    if result is not None:
+                        logger.info("Loaded SGDFNet baseline from p0: %s (%d rows)", pred_file, len(result))
+                        return result
+                except Exception as exc:
+                    logger.warning("Failed to load p0 predictions from %s: %s", pred_file, exc)
+        logger.error("p0 SGDFNet predictions not found in %s", [str(d) for d in p0_dirs])
+        return None
+
+    # ── Source: teacher (default) ─────────────────────────────────────
+    try:
+        from models.deep_sgdf_delta.teacher_adapters.sgdfnet_teacher import load_predictions
+        result = load_predictions(
+            source_repo_root=source_repo_root,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if result is not None and len(result) > 0:
+            # Convert teacher format to baseline format
+            pred_df = pd.DataFrame({
+                "business_day": pd.to_datetime(result["business_day"]).dt.normalize(),
+                "hour": result["hour_business"].astype(int),
+                "rt_pred": result["teacher_pred"].astype(float),
+                "da_anchor": result.get("da_anchor", 0.0),
+            })
+            logger.info("Loaded SGDFNet baseline from teacher adapter (%d rows)", len(pred_df))
+            return pred_df
+    except Exception as exc:
+        logger.warning("SGDFNet teacher adapter failed: %s", exc)
+
+    logger.error("SGDFNet predictions not available from any source")
+    return None
+
+
+def _standardize_sgdfnet_predictions(
+    df: pd.DataFrame, start_date: str, end_date: str
+) -> pd.DataFrame | None:
+    """Standardize raw SGDFNet predictions to (business_day, hour, rt_pred, da_anchor)."""
+    result = df.copy()
+
+    # Find prediction column
+    pred_col = None
+    for c in ("rt_hat", "y_pred", "rt_pred", "预测实时电价"):
+        if c in result.columns:
+            pred_col = c
+            break
+    if pred_col is None:
+        return None
+
+    # Find timestamp column
+    ts_col = None
+    for c in ("timestamp", "时刻", "ds"):
+        if c in result.columns:
+            ts_col = c
+            break
+    if ts_col is None:
+        return None
+
+    # Find DA anchor
+    da_col = None
+    for c in ("da_anchor", "日前电价"):
+        if c in result.columns:
+            da_col = c
+            break
+
+    ts = pd.to_datetime(result[ts_col])
+    bd = ts.dt.normalize()
+    h = ts.dt.hour
+    mask0 = h == 0
+    hb = h.copy()
+    hb[mask0] = 24
+    bd[mask0] = bd[mask0] - pd.Timedelta(days=1)
+
+    pred_df = pd.DataFrame({
+        "business_day": bd,
+        "hour": hb.astype(int),
+        "rt_pred": pd.to_numeric(result[pred_col], errors="coerce"),
+    })
+    if da_col:
+        pred_df["da_anchor"] = pd.to_numeric(result[da_col], errors="coerce")
+    else:
+        pred_df["da_anchor"] = 0.0
+
+    pred_df = pred_df.dropna(subset=["rt_pred"])
+    pred_df["business_day"] = pd.to_datetime(pred_df["business_day"]).dt.normalize()
+
+    # Date filter
+    pred_df = pred_df[
+        (pred_df["business_day"] >= pd.Timestamp(start_date))
+        & (pred_df["business_day"] <= pd.Timestamp(end_date))
+    ]
+    return pred_df
+
 
 def build_sgdfnet_baseline_candidate(
     raw_df: pd.DataFrame | None,
     gt_df: pd.DataFrame,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
+    *,
+    source_repo_root: str | None = None,
+    sgdfnet_root: str | None = None,
+    baseline_source: str = "teacher",
+    sgdfnet_predictions_path: str | None = None,
 ) -> dict[str, Any]:
-    """Build SGDFNet baseline by running SGDFNet inference or using known metrics."""
-    # Try to get actual SGDFNet predictions for fair comparison
-    if _SGDFNET_AVAILABLE and raw_df is not None:
-        try:
-            from models.deep_sgdf_delta.sgdfnet_bridge import preprocess_dataframe, FeatureConfig
-            feat_config = FeatureConfig(
-                include_forecast_columns=True,
-                include_actual_history_columns=False,
-                use_visible_actual_history=True,
-                include_delta_history_features=True,
-                include_tf_moving_average_features=False,
-                include_static_group_graph_features=False,
-                include_weekly_history_features=False,
-                include_segment_local_stats=False,
-                include_forecast_pressure_interactions=False,
-                include_calendar_features=True,
-                include_engineered_forecast_features=True,
-            )
-            frame, _ = preprocess_dataframe(raw_df, feat_config)
-            frame["business_day"] = pd.to_datetime(frame["business_day"]).dt.normalize()
+    """Build SGDFNet baseline from REAL predictions.
 
-            rows: list[dict] = []
-            for target_day in pd.date_range(start_date, end_date, freq="D"):
-                day_rows = frame[frame["business_day"] == target_day]
-                if day_rows.empty:
-                    continue
-                for _, row in day_rows.iterrows():
-                    hour = int(row.get("target_hour", row.get("hour", 0)))
-                    da = float(row.get("da_anchor", 0.0))
-                    delta_hat = float(row.get("delta_hat", 0.0))
-                    rows.append({
-                        "business_day": target_day,
-                        "hour": hour,
-                        "rt_pred": da + delta_hat,
-                        "delta_pred": delta_hat,
-                        "da_anchor": da,
-                    })
+    Sources (controlled by --baseline-source):
+      teacher  -- sgdfnet_teacher adapter (loads from experiment CSV)
+      p0       -- p0_reproduce_sgdfnet_baseline.py output
+      file     -- --sgdfnet-predictions CSV path
 
-            if rows:
-                pred_df = pd.DataFrame(rows)
-                pred_df["business_day"] = pd.to_datetime(pred_df["business_day"]).dt.normalize()
-                return evaluate_candidate_full(pred_df, gt_df, "sgdfnet_baseline")
+    If no real predictions found, returns baseline_unavailable result.
+    """
+    pred_df = _load_sgdfnet_predictions_real(
+        source_repo_root=source_repo_root,
+        sgdfnet_root=sgdfnet_root,
+        start_date=str(start_date.date()),
+        end_date=str(end_date.date()),
+        baseline_source=baseline_source,
+        sgdfnet_predictions_path=sgdfnet_predictions_path,
+    )
 
-        except Exception as exc:
-            logger.warning("SGDFNet prediction failed, using reference metrics: %s", exc)
+    if pred_df is None or pred_df.empty:
+        logger.error(
+            "SGDFNet baseline UNAVAILABLE (source=%s). "
+            "Cannot fabricate baseline metrics. "
+            "Provide --sgdfnet-predictions or run p0_reproduce_sgdfnet_baseline.py first.",
+            baseline_source,
+        )
+        return {
+            "name": "sgdfnet_baseline",
+            "overall_sMAPE_floor50": float("nan"),
+            "monthly_avg_sMAPE_floor50": float("nan"),
+            "monthly_worst_sMAPE": float("nan"),
+            "9_16_sMAPE_floor50": float("nan"),
+            "1_8_sMAPE_floor50": float("nan"),
+            "17_24_sMAPE_floor50": float("nan"),
+            "delta_mae": float("nan"),
+            "rows_matched": 0,
+            "monthly_smape": {},
+            "period_smape": {},
+            "bucket_smape": {},
+            "leakage_risk": False,
+            "baseline_unavailable": True,
+            "baseline_source": baseline_source,
+        }
 
-    # Fallback: use known reference metrics
-    return {
-        "name": "sgdfnet_baseline",
-        "overall_sMAPE_floor50": BASELINE_SGDFNET,
-        "monthly_avg_sMAPE_floor50": BASELINE_SGDFNET,
-        "monthly_worst_sMAPE": BASELINE_SGDFNET,
-        "9_16_sMAPE_floor50": BASELINE_SGDFNET,
-        "1_8_sMAPE_floor50": BASELINE_SGDFNET,
-        "17_24_sMAPE_floor50": BASELINE_SGDFNET,
-        "delta_mae": float("nan"),
-        "rows_matched": 0,
-        "monthly_smape": {},
-        "period_smape": {},
-        "bucket_smape": {},
-        "leakage_risk": False,
-    }
+    logger.info("SGDFNet baseline: %d predictions from source=%s", len(pred_df), baseline_source)
+    result = evaluate_candidate_full(pred_df, gt_df, "sgdfnet_baseline")
+    result["baseline_source"] = baseline_source
+    result["baseline_unavailable"] = False
+    return result
 
 
 # ── V2 residual SGDFNet blend ────────────────────────────────────────
@@ -1038,6 +1185,19 @@ def main() -> None:
         logger.error("No ground truth data in evaluation period. Exiting.")
         sys.exit(1)
 
+    # ── RT916 scope config (Phase 5 Task C) ──────────────────────────
+    rt916_scope_config = None
+    if args.rt916_scope == "local":
+        from models.deep_sgdf_delta.rt916_scope import RT916ScopeConfig
+        rt916_scope_config = RT916ScopeConfig(enabled=True)
+        logger.info("  RT916 scope : local (high-volatility only)")
+    elif args.rt916_scope == "full":
+        from models.deep_sgdf_delta.rt916_scope import RT916ScopeConfig
+        rt916_scope_config = RT916ScopeConfig(enabled=False)  # disabled = no restriction
+        logger.info("  RT916 scope : full (no restriction)")
+    else:
+        logger.info("  RT916 scope : disabled (no RT916 teacher)")
+
     # ── Collect candidates ───────────────────────────────────────────
     all_results: list[dict[str, Any]] = []
 
@@ -1049,7 +1209,13 @@ def main() -> None:
         logger.info("-" * 60)
         logger.info("[1/7] sgdfnet_baseline")
         logger.info("-" * 60)
-        baseline_result = build_sgdfnet_baseline_candidate(raw_df, gt_df, start_date, end_date)
+        baseline_result = build_sgdfnet_baseline_candidate(
+            raw_df, gt_df, start_date, end_date,
+            source_repo_root=args.source_repo_root,
+            sgdfnet_root=args.sgdfnet_root,
+            baseline_source=args.baseline_source,
+            sgdfnet_predictions_path=args.sgdfnet_predictions,
+        )
         baseline_result["runtime_seconds"] = 0
         all_results.append(baseline_result)
         logger.info("  overall_sMAPE = %s", baseline_result["overall_sMAPE_floor50"])
@@ -1143,6 +1309,7 @@ def main() -> None:
         v3_tr_pred, v3_tr_info = train_and_predict_v3(
             raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
             profile_name="v3_teacher_residual", teachers=args.teachers,
+            rt916_scope_config=rt916_scope_config,
         )
         if v3_tr_pred is not None:
             m = evaluate_candidate_full(v3_tr_pred, gt_df, "v3_teacher_residual")
@@ -1163,6 +1330,7 @@ def main() -> None:
         v3_moe_pred, v3_moe_info = train_and_predict_v3(
             raw_df, start_date, end_date, args.device, args.amp, args.fast_dev_run,
             profile_name="v3_teacher_moe", teachers=args.teachers,
+            rt916_scope_config=rt916_scope_config,
         )
         if v3_moe_pred is not None:
             m = evaluate_candidate_full(v3_moe_pred, gt_df, "v3_teacher_moe")

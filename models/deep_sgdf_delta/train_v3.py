@@ -253,6 +253,8 @@ def train_model_v3(
     output_dir: Path | None = None,
     fast_dev_run: bool = False,
     teacher_pred_df: pd.DataFrame | None = None,
+    teacher_names: list[str] | None = None,
+    rt916_scope_config=None,
 ) -> dict[str, Any]:
     """Train TrendKnight-X v3 for a single decision day (walk-forward).
 
@@ -264,6 +266,8 @@ def train_model_v3(
         output_dir: Directory for saving best model checkpoint
         fast_dev_run: If True, use tiny subset and few epochs for quick test
         teacher_pred_df: Optional teacher predictions for distillation
+        teacher_names: Names of teachers (e.g., ["sgdfnet", "rt916", "timemixer"])
+        rt916_scope_config: Optional RT916ScopeConfig for local teacher restriction
 
     Returns:
         Dict with model, metrics, history, etc.
@@ -284,6 +288,8 @@ def train_model_v3(
         train_min_days=train_min,
         teacher_pred_df=teacher_pred_df,
         num_teachers=train_config.num_teachers,
+        teacher_names=teacher_names,
+        rt916_scope_config=rt916_scope_config,
     )
 
     # Fast-dev-run: limit dataset size

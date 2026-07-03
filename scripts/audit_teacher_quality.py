@@ -379,6 +379,14 @@ def audit_single_teacher(
     # ── sMAPE_floor50 ────────────────────────────────────────────────
     result["teacher_sMAPE_floor50"] = round(smape_fn(yt, yp), 4)
 
+    # ── Per-period sMAPE (Phase 5 Task C: RT916 local performance) ───
+    for period in ["1_8", "9_16", "17_24"]:
+        mask = period_mask_fn(hours, period)
+        if mask.sum() > 0:
+            result[f"teacher_sMAPE_{period}"] = round(smape_fn(yt[mask], yp[mask]), 4)
+        else:
+            result[f"teacher_sMAPE_{period}"] = float("nan")
+
     # ── MAE ──────────────────────────────────────────────────────────
     result["teacher_MAE"] = round(float(np.mean(np.abs(yp - yt))), 4)
 
@@ -695,6 +703,14 @@ def write_audit_markdown(
         f"- 1_8 coverage: {_fmt(_get('rt916', 'period_coverage_1_8'))}",
         f"- 9_16 coverage: {_fmt(rt_916_cov)}",
         f"- 17_24 coverage: {_fmt(_get('rt916', 'period_coverage_17_24'))}",
+        f"- **Per-period sMAPE (RT916 local performance):**",
+        f"  - 1_8 sMAPE: {_fmt(_get('rt916', 'teacher_sMAPE_1_8'))}",
+        f"  - 9_16 sMAPE: {_fmt(_get('rt916', 'teacher_sMAPE_9_16'))}",
+        f"  - 17_24 sMAPE: {_fmt(_get('rt916', 'teacher_sMAPE_17_24'))}",
+        f"- **Per-period sMAPE (SGDFNet for comparison):**",
+        f"  - 1_8 sMAPE: {_fmt(_get('sgdfnet', 'teacher_sMAPE_1_8'))}",
+        f"  - 9_16 sMAPE: {_fmt(_get('sgdfnet', 'teacher_sMAPE_9_16'))}",
+        f"  - 17_24 sMAPE: {_fmt(_get('sgdfnet', 'teacher_sMAPE_17_24'))}",
         f"- **Verdict:** {q4_verdict}",
         "",
         "### Q5: TimeMixer 是否值得进入 teacher_moe？",
@@ -722,9 +738,9 @@ def write_audit_markdown(
 
     if rt_sufficient:
         if rt_only_hv:
-            md.append("- RT916: **USE selectively** -- valuable for high-volatility / 9_16 hours only.")
+            md.append("- RT916: **USE selectively (LOCAL scope)** -- restricted to high-volatility / 9_16 / 17_24 hours only. Blocked from normal low-volatility 1_8 hours.")
         else:
-            md.append("- RT916: **USE** -- has broad coverage beyond just high-volatility hours.")
+            md.append("- RT916: **USE with scope restriction** -- Phase 5 local scope limits RT916 to high-volatility hours. See Q4 per-period sMAPE for details.")
     else:
         md.append("- RT916: **SKIP** -- insufficient coverage for reliable teacher distillation.")
 

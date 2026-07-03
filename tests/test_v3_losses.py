@@ -258,3 +258,137 @@ class TestCombinedLossV3:
         assert rt_pred.grad is not None
         assert delta_pred.grad is not None
         assert conf.grad is not None
+
+
+# ── Phase 5 NaN Safety Tests ─────────────────────────────────────────
+
+class TestTeacherNaNSafety:
+    """Phase 5 Task B: teacher_pred 含 NaN 时 loss 不 NaN."""
+
+    def test_nan_in_teacher_pred_returns_finite(self):
+        """teacher_pred contains NaN → loss must be finite, not NaN."""
+        loss_fn = TeacherResidualDistillLoss()
+        dp = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+        dt = torch.tensor([[1.5, 2.5, 3.5, 4.5]])
+        tp = torch.tensor([[[10.0, 2.0, float('nan'), 4.0]]])  # NaN at h2
+        tm = torch.tensor([[1.0]])
+        result = loss_fn(dp, dt, tp, tm)
+        assert torch.isfinite(result), f"Expected finite, got {result.item()}"
+        assert result.item() >= 0
+
+    def test_all_teacher_hours_nan_returns_zero(self):
+        """All teacher_pred hours are NaN → no valid hours → loss = 0."""
+        loss_fn = TeacherResidualDistillLoss()
+        dp = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+        dt = torch.tensor([[1.5, 2.5, 3.5, 4.5]])
+        tp = torch.full((1, 1, 4), float('nan'))
+        tm = torch.tensor([[1.0]])
+        result = loss_fn(dp, dt, tp, tm)
+        assert result.item() == pytest.approx(0.0)
+
+    def test_partial_mask_only_valid_hours(self):
+        """teacher_mask partially available → only compute on valid hours."""
+        loss_fn = TeacherResidualDistillLoss()
+        dp = torch.tensor([[0.0, 0.0, 0.0, 0.0]])
+        dt = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+        # Two teachers: teacher 0 available, teacher 1 all NaN pred
+        tp = torch.tensor([[[1.0, 2.0, 3.0, 4.0],
+                            [float('nan')]*4]])
+        tm = torch.tensor([[1.0, 1.0]])
+        result = loss_fn(dp, dt, tp, tm)
+        assert torch.isfinite(result)
+        # Teacher 0: student_res=[1,2,3,4], teacher_res=[0,0,0,0], diff=[1,4,9,16], mean=30/4=7.5
+        # Teacher 1: all NaN → 0 valid hours → skip
+        assert result.item() == pytest.approx(7.5, abs=1e-4)
+
+    def test_nan_in_delta_true_returns_finite(self):
+        """delta_true contains NaN → those hours excluded, loss finite."""
+        loss_fn = TeacherResidualDistillLoss()
+        dp = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+        dt = torch.tensor([[1.5, float('nan'), 3.5, 4.5]])
+        tp = torch.tensor([[[10.0, 2.0, 3.0, 4.0]]])
+        tm = torch.tensor([[1.0]])
+        result = loss_fn(dp, dt, tp, tm)
+        assert torch.isfinite(result)
+
+    def test_nan_in_delta_pred_student_returns_finite(self):
+        """delta_pred_student contains NaN → those hours excluded, loss finite."""
+        loss_fn = TeacherResidualDistillLoss()
+        dp = torch.tensor([[float('nan'), 2.0, 3.0, 4.0]])
+        dt = torch.tensor([[1.5, 2.5, 3.5, 4.5]])
+        tp = torch.tensor([[[10.0, 2.0, 3.0, 4.0]]])
+        tm = torch.tensor([[1.0]])
+        result = loss_fn(dp, dt, tp, tm)
+        assert torch.isfinite(result)
+
+    def test_with_valid_mask(self):
+        """valid_mask further restricts which hours are computed."""
+        loss_fn = TeacherResidualDistillLoss()
+        dp = torch.tensor([[0.0, 0.0, 0.0, 0.0]])
+        dt = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+        tp = torch.tensor([[[1.0, 2.0, 3.0, 4.0]]])
+        tm = torch.tensor([[1.0]])
+        vm = torch.tensor([[1.0, 1.0, 0.0, 0.0]])  # only first 2 hours valid
+        result = loss_fn(dp, dt, tp, tm, valid_mask=vm)
+        assert torch.isfinite(result)
+        # Only h0, h1 valid: student_res=[1,2], teacher_res=[0,0], diff=[1,4], mean=5/2=2.5
+        assert result.item() == pytest.approx(2.5, abs=1e-4)
+
+
+class TestCombinedLossNaN:
+    """Phase 5 Task B: total loss 永远 finite."""
+
+    def _make_inputs(self, B=2):
+        rt_pred = torch.randn(B, 24) + 100
+        rt_true = torch.randn(B, 24) + 100
+        dp = torch.randn(B, 24)
+        dt = torch.randn(B, 24)
+        seg = torch.zeros(B, 24, dtype=torch.long)
+        seg[:, 8:16] = 1
+        seg[:, 16:] = 2
+        conf = torch.sigmoid(torch.randn(B, 24))
+        return rt_pred, rt_true, dp, dt, seg, conf
+
+    def test_nan_teacher_pred_total_finite(self):
+        """teacher_pred has NaN → total loss must still be finite."""
+        loss_fn = CombinedLossV3()
+        rt_pred, rt_true, dp, dt, seg, conf = self._make_inputs()
+        tp = torch.randn(2, 1, 24)
+        tp[0, 0, :10] = float('nan')
+        tm = torch.ones(2, 1)
+        result = loss_fn(rt_pred, rt_true, dp, dt, seg, conf,
+                         teacher_pred=tp, teacher_mask=tm)
+        assert torch.isfinite(result["total"]), f"total={result['total'].item()}"
+        assert torch.isfinite(result["teacher_distill"])
+
+    def test_all_teacher_nan_total_finite(self):
+        """All teacher predictions are NaN → total still finite."""
+        loss_fn = CombinedLossV3()
+        rt_pred, rt_true, dp, dt, seg, conf = self._make_inputs()
+        tp = torch.full((2, 1, 24), float('nan'))
+        tm = torch.ones(2, 1)
+        result = loss_fn(rt_pred, rt_true, dp, dt, seg, conf,
+                         teacher_pred=tp, teacher_mask=tm)
+        assert torch.isfinite(result["total"])
+        assert result["teacher_distill"].item() == pytest.approx(0.0)
+
+    def test_inf_in_inputs_total_finite(self):
+        """Inf in delta_true → total must be finite (non-finite components → 0)."""
+        loss_fn = CombinedLossV3()
+        rt_pred, rt_true, dp, dt, seg, conf = self._make_inputs()
+        dt[0, 5] = float('inf')
+        result = loss_fn(rt_pred, rt_true, dp, dt, seg, conf)
+        assert torch.isfinite(result["total"])
+
+    def test_multiple_teachers_some_nan(self):
+        """Multiple teachers, some with NaN → only valid ones contribute."""
+        loss_fn = CombinedLossV3()
+        rt_pred, rt_true, dp, dt, seg, conf = self._make_inputs()
+        tp = torch.randn(2, 3, 24)
+        tp[0, 0, :] = float('nan')   # teacher 0 all NaN for batch 0
+        tp[1, 2, :] = float('nan')   # teacher 2 all NaN for batch 1
+        tm = torch.ones(2, 3)
+        result = loss_fn(rt_pred, rt_true, dp, dt, seg, conf,
+                         teacher_pred=tp, teacher_mask=tm)
+        assert torch.isfinite(result["total"])
+        assert result["teacher_distill"].item() > 0  # some teachers still valid
