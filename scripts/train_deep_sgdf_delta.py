@@ -18,16 +18,10 @@ import yaml
 
 # ── Path setup ───────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SGDFNET_SRC = PROJECT_ROOT.parent / "electricity_forecast_model2.0_exp" / "SGDFNet" / "src"
-if SGDFNET_SRC.exists() and str(SGDFNET_SRC) not in sys.path:
-    sys.path.insert(0, str(SGDFNET_SRC))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-# Also try the original project path
-_ORIG_SGDFNET = Path(r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp\SGDFNet\src")
-if _ORIG_SGDFNET.exists() and str(_ORIG_SGDFNET) not in sys.path:
-    sys.path.insert(0, str(_ORIG_SGDFNET))
-
-from sgdfnet.data_contract import FeatureConfig, load_dataset  # noqa: E402
+from models.deep_sgdf_delta.sgdfnet_bridge import lazy_import as _bridge_lazy  # noqa: E402
 
 from models.deep_sgdf_delta.train import TrainConfig, train_model  # noqa: E402
 from models.deep_sgdf_delta.dataset import build_training_datasets  # noqa: E402
@@ -41,6 +35,8 @@ def parse_args() -> argparse.Namespace:
         description="Train DeepSGDFDelta / TrendKnight model for realtime price trend prediction",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--sgdfnet-root", type=str, default=None,
+                        help="Path to SGDFNet project root (contains src/sgdfnet/)")
     parser.add_argument("--config", type=str, default="models/deep_sgdf_delta/config.yaml",
                         help="Path to YAML config file")
     parser.add_argument("--data-path", type=str, default=None,
@@ -89,6 +85,10 @@ def main() -> None:
     start_day = args.start_day or cfg.get("start_day", "2026-01-01")
     end_day = args.end_day or cfg.get("end_day", "2026-05-11")
 
+    # Resolve SGDFNet via bridge
+    _bridge_lazy(args.sgdfnet_root)
+    from models.deep_sgdf_delta.sgdfnet_bridge import load_dataset as _load_dataset
+
     # Build TrainConfig
     model_cfg = cfg.get("model", {})
     train_cfg_dict = cfg.get("training", {})
@@ -123,18 +123,21 @@ def main() -> None:
     )
 
     # Build FeatureConfig
+    from models.deep_sgdf_delta.sgdfnet_bridge import FeatureConfig as _FeatureConfig
     feat_cfg_dict = cfg.get("feature_config", {})
-    feature_config = FeatureConfig(**feat_cfg_dict)
+    feature_config = _FeatureConfig(**feat_cfg_dict)
 
-    # Load data
+    # Load data — try project root first, then sibling project
     data_file = PROJECT_ROOT / data_path
     if not data_file.exists():
-        data_file = Path(r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp") / data_path
+        sibling = PROJECT_ROOT.parent / "electricity_forecast_model2.0_exp" / data_path
+        if sibling.exists():
+            data_file = sibling
     if not data_file.exists():
         raise FileNotFoundError(f"Data file not found: {data_path}")
 
     logger.info(f"Loading data from {data_file}")
-    raw_df = load_dataset(data_file)
+    raw_df = _load_dataset(data_file)
     logger.info(f"Data loaded: {len(raw_df)} rows, {raw_df['时刻'].min()} to {raw_df['时刻'].max()}")
 
     # Output directory

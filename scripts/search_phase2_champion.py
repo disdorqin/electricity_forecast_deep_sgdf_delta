@@ -43,19 +43,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# SGDFNet sibling path resolution
-_ORIG_PROJECT = Path(
-    r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp"
-)
-_ORIG_SGDFNET_SRC = _ORIG_PROJECT / "SGDFNet" / "src"
+# SGDFNet sibling path resolution (no hardcoded absolute paths)
 _SIBLING_SGDFNET_SRC = (
     PROJECT_ROOT.parent / "electricity_forecast_model2.0_exp" / "SGDFNet" / "src"
 )
 
-for _p in [_ORIG_SGDFNET_SRC, _SIBLING_SGDFNET_SRC]:
-    if _p.exists() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-        break
+if _SIBLING_SGDFNET_SRC.exists() and str(_SIBLING_SGDFNET_SRC) not in sys.path:
+    sys.path.insert(0, str(_SIBLING_SGDFNET_SRC))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -172,7 +166,8 @@ def load_raw_data(data_path: str) -> pd.DataFrame:
     """Load raw data, trying multiple path resolutions."""
     p = Path(data_path)
     if not p.is_absolute():
-        for base in [PROJECT_ROOT, _ORIG_PROJECT]:
+        sibling_project = PROJECT_ROOT.parent / "electricity_forecast_model2.0_exp"
+        for base in [PROJECT_ROOT, sibling_project]:
             candidate = base / p
             if candidate.exists():
                 p = candidate

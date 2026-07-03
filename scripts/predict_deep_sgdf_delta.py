@@ -19,16 +19,10 @@ import yaml
 
 # ── Path setup ───────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_ORIG_SGDFNET = Path(r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp\SGDFNet\src")
-if _ORIG_SGDFNET.exists() and str(_ORIG_SGDFNET) not in sys.path:
-    sys.path.insert(0, str(_ORIG_SGDFNET))
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from sgdfnet.data_contract import FeatureConfig, load_dataset  # noqa: E402
-from sgdfnet.protocol_b_cutoff import (  # noqa: E402
-    _build_protocol_b_visible_frame,
-    _build_inference_frame,
-    load_protocol_b_cutoff_config,
-)
+from models.deep_sgdf_delta.sgdfnet_bridge import lazy_import as _bridge_lazy  # noqa: E402
 
 from models.deep_sgdf_delta.dataset import build_predict_dataset  # noqa: E402
 from models.deep_sgdf_delta.model import DeepSGDFDeltaConfig, build_model  # noqa: E402
@@ -43,6 +37,8 @@ def parse_args() -> argparse.Namespace:
         description="Predict realtime price delta with trained DeepSGDFDelta model",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--sgdfnet-root", type=str, default=None,
+                        help="Path to SGDFNet project root (contains src/sgdfnet/)")
     parser.add_argument("--date", type=str, required=True,
                         help="Target prediction date (YYYY-MM-DD)")
     parser.add_argument("--model-dir", type=str, required=True,
@@ -75,6 +71,16 @@ def main() -> None:
     else:
         cfg = {}
 
+    # Resolve SGDFNet via bridge
+    _bridge_lazy(args.sgdfnet_root)
+    from models.deep_sgdf_delta.sgdfnet_bridge import (
+        FeatureConfig as _FeatureConfig,
+        load_dataset as _load_dataset,
+        _build_protocol_b_visible_frame,
+        _build_inference_frame,
+        load_protocol_b_cutoff_config,
+    )
+
     # Load model config
     model_dir = Path(args.model_dir)
     run_config_path = model_dir / "run_config.json"
@@ -102,13 +108,17 @@ def main() -> None:
         global_residual_weight=model_cfg.get("global_residual_weight", 0.3),
     )
 
-    # Load data
+    # Load data — try project root first, then sibling project
     data_path = args.data_path or cfg.get("data_path", "data/shandong_pmos_hourly.xlsx")
     data_file = PROJECT_ROOT / data_path
     if not data_file.exists():
-        data_file = Path(r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp") / data_path
+        sibling = PROJECT_ROOT.parent / "electricity_forecast_model2.0_exp" / data_path
+        if sibling.exists():
+            data_file = sibling
+    if not data_file.exists():
+        raise FileNotFoundError(f"Data file not found: {data_path}")
 
-    raw_df = load_dataset(data_file)
+    raw_df = _load_dataset(data_file)
     target_day = pd.Timestamp(args.date)
 
     # Build visible frame (cutoff-safe)
@@ -118,13 +128,15 @@ def main() -> None:
     sgdfnet_cfg_path = cfg.get("sgdfnet_config_path", "SGDFNet/configs/cutoff_recovery_2026_diag_a_prune_actualside.yaml")
     sgdfnet_cfg_file = PROJECT_ROOT / sgdfnet_cfg_path
     if not sgdfnet_cfg_file.exists():
-        sgdfnet_cfg_file = Path(r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp") / sgdfnet_cfg_path
+        sibling_cfg = PROJECT_ROOT.parent / "electricity_forecast_model2.0_exp" / sgdfnet_cfg_path
+        if sibling_cfg.exists():
+            sgdfnet_cfg_file = sibling_cfg
 
     visible_df = _build_protocol_b_visible_frame(raw_df, decision_day, decision_hour)
 
     # Build predict dataset
     feat_cfg_dict = cfg.get("feature_config", {})
-    feature_config = FeatureConfig(**feat_cfg_dict)
+    feature_config = _FeatureConfig(**feat_cfg_dict)
     window_days = train_cfg.get("window_days", cfg.get("training", {}).get("window_days", 7))
 
     pred_ds, actual_feature_cols = build_predict_dataset(

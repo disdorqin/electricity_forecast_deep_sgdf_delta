@@ -27,39 +27,39 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-# ── SGDFNet integration (same path resolution as V1) ─────────────────
-_THIS_DIR = Path(__file__).resolve().parent
-_CANDIDATES = [
-    _THIS_DIR.parent.parent / "SGDFNet" / "src",
-    _THIS_DIR.parent.parent / "electricity_forecast_model2.0_exp" / "SGDFNet" / "src",
-    _THIS_DIR.parent.parent.parent / "electricity_forecast_model2.0_exp" / "SGDFNet" / "src",
-    Path(r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp\SGDFNet\src"),
-]
-for _p in _CANDIDATES:
-    if _p.exists() and str(_p) not in sys.path:
-        sys.path.insert(0, str(_p))
-        break
+# ── SGDFNet integration via bridge (lazy) ────────────────────────────
+from models.deep_sgdf_delta import sgdfnet_bridge as _bridge
 
-from sgdfnet.data_contract import (  # noqa: E402
-    FeatureConfig,
-    preprocess_dataframe,
-)
 
-# Default feature config (mirrors V1 production)
-DEFAULT_FEATURE_CONFIG = FeatureConfig(
-    include_forecast_columns=True,
-    include_actual_history_columns=False,
-    use_visible_actual_history=True,
-    include_delta_history_features=True,
-    include_tf_moving_average_features=False,
-    include_static_group_graph_features=False,
-    include_weekly_history_features=False,
-    include_forecast_residual_history_features=False,
-    include_segment_local_stats=False,
-    include_forecast_pressure_interactions=False,
-    include_calendar_features=True,
-    include_engineered_forecast_features=True,
-)
+def _get_feature_config():
+    """Lazily create the default FeatureConfig via the bridge."""
+    return _bridge.FeatureConfig(
+        include_forecast_columns=True,
+        include_actual_history_columns=False,
+        use_visible_actual_history=True,
+        include_delta_history_features=True,
+        include_tf_moving_average_features=False,
+        include_static_group_graph_features=False,
+        include_weekly_history_features=False,
+        include_forecast_residual_history_features=False,
+        include_segment_local_stats=False,
+        include_forecast_pressure_interactions=False,
+        include_calendar_features=True,
+        include_engineered_forecast_features=True,
+    )
+
+
+# Lazy-evaluated default config (access triggers SGDFNet resolution)
+class _LazyDefaultConfig:
+    _instance = None
+    def __getattr__(self, name):
+        if _LazyDefaultConfig._instance is None:
+            _LazyDefaultConfig._instance = _get_feature_config()
+        return getattr(_LazyDefaultConfig._instance, name)
+    def __repr__(self):
+        return repr(_get_feature_config())
+
+DEFAULT_FEATURE_CONFIG = _LazyDefaultConfig()
 
 
 def _resolve_feature_columns(frame: pd.DataFrame, feature_cols: list[str]) -> list[str]:
@@ -249,7 +249,7 @@ def build_training_datasets_v2(
 
     Returns (train_ds, val_ds, feature_cols).
     """
-    frame, feature_cols = preprocess_dataframe(raw_df, feature_config)
+    frame, feature_cols = _bridge.preprocess_dataframe(raw_df, feature_config)
 
     # Split by business_day
     val_start = decision_day - pd.Timedelta(days=val_days)
@@ -287,11 +287,11 @@ def build_predict_dataset_v2(
     Uses the visible frame (cutoff-safe) for feature computation.
     """
     if visible_frame is not None:
-        frame, feature_cols = preprocess_dataframe(
+        frame, feature_cols = _bridge.preprocess_dataframe(
             visible_frame, feature_config, rt_history_col="visible_rt_anchor",
         )
     else:
-        frame, feature_cols = preprocess_dataframe(raw_df, feature_config)
+        frame, feature_cols = _bridge.preprocess_dataframe(raw_df, feature_config)
 
     target_frame = frame[frame["business_day"] == target_day].copy()
     if target_frame.empty:

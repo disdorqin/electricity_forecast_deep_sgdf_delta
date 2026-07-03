@@ -159,7 +159,7 @@ def _resolve_data_path(args: argparse.Namespace) -> Path:
     # Default locations
     candidates = [
         PROJECT_ROOT / "data" / "shandong_pmos_hourly.xlsx",
-        Path(r"D:\作业\大创_挑战杯_互联网\大学生创新创业计划\大创实现\其他资料\electricity_forecast_model2.0_exp") / "data" / "shandong_pmos_hourly.xlsx",
+        PROJECT_ROOT.parent / "electricity_forecast_model2.0_exp" / "data" / "shandong_pmos_hourly.xlsx",
     ]
     for c in candidates:
         if c.exists():
