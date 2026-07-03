@@ -69,6 +69,7 @@ from models.deep_sgdf_delta.losses import (
     SmoothnessLoss,
 )
 from models.deep_sgdf_delta.metrics import smape_floor50
+from models.deep_sgdf_delta.realtime_feature_contract import ALL_FEATURES
 
 logging.basicConfig(
     level=logging.INFO,
@@ -189,6 +190,20 @@ Examples:
     parser.add_argument("--fast-dev-run", action="store_true",
                         help="Smoke test: last 10 train days + 5 val days + 3 epochs")
 
+    # ── Phase DeepFinal-2: feature pipeline ──────────────────────────
+    parser.add_argument("--sgdfnet-predictions", type=str, default=None,
+                        help="Path to CSV with real SGDFNet predictions (ds, sgdfnet_pred)")
+    parser.add_argument("--allow-sgdfnet-fallback", action="store_true", default=False,
+                        help="Allow sgdfnet_pred fallback to da_anchor (smoke/predict only)")
+    parser.add_argument("--feature-mode", type=str, default="full",
+                        choices=["minimal", "full"],
+                        help="Feature pipeline mode: 'full' (default) uses feature builder, "
+                             "'minimal' uses raw data columns only")
+    parser.add_argument("--feature-audit-only", action="store_true", default=False,
+                        help="Run feature audit and exit without training")
+    parser.add_argument("--strict-feature-contract", action="store_true", default=False,
+                        help="Fail if required features are missing")
+
     return parser.parse_args()
 
 
@@ -276,12 +291,33 @@ def _rename_chinese_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Data loading ─────────────────────────────────────────────────────────
 
-def load_raw_data(data_path: str) -> pd.DataFrame:
+def load_raw_data(
+    data_path: str,
+    sgdfnet_pred_path: str | None = None,
+    allow_fallback: bool = False,
+) -> pd.DataFrame:
     """Load the raw hourly dataset from CSV or XLSX.
 
     Tries utf-8-sig first, then gbk for CSV.  Handles both Chinese column
     names (Shandong spot market format) and English column names.  Renames
-    columns to canonical names and adds sgdfnet_pred placeholder if missing.
+    columns to canonical names.  SGDFNet predictions are loaded separately
+    (not auto-filled from ``da_anchor``).
+
+    Args:
+        data_path: Path to CSV or XLSX data file.
+        sgdfnet_pred_path: Optional path to CSV with SGDFNet predictions.
+        allow_fallback: If True, missing sgdfnet_pred is filled from
+            da_anchor.  Only for smoke/predict runs.
+
+    Returns:
+        DataFrame with canonical column names, business-time columns,
+        and ``sgdfnet_pred`` if available (or fallback if allowed).
+
+    Raises:
+        FileNotFoundError: If *data_path* does not exist.
+        ValueError: If core columns are missing.
+        ValueError: If ``sgdfnet_pred`` is missing and *allow_fallback*
+            is False.
     """
     path = Path(data_path)
     if not path.exists():
@@ -346,15 +382,58 @@ def load_raw_data(data_path: str) -> pd.DataFrame:
             "Expected 'rt_actual', 'rt_price', or '实时电价'."
         )
 
-    # Ensure sgdfnet_pred exists (placeholder = da_anchor)
-    if "sgdfnet_pred" not in df.columns:
-        logger.info("sgdfnet_pred not found — using da_anchor as placeholder")
-        df["sgdfnet_pred"] = df["da_anchor"]
-    else:
-        # Fill NaN in sgdfnet_pred with da_anchor
+    # ── SGDFNet predictions ──────────────────────────────────────────
+    # Load from file or create placeholder
+    has_sgdfnet = "sgdfnet_pred" in df.columns
+
+    if sgdfnet_pred_path and not has_sgdfnet:
+        # Load from external file
+        if Path(sgdfnet_pred_path).exists():
+            sgd_df = pd.read_csv(sgdfnet_pred_path)
+            # Try to find timestamp and prediction columns
+            ts_col = None
+            for col in ["ds", "timestamp", "时刻", "time"]:
+                if col in sgd_df.columns:
+                    ts_col = col
+                    break
+            if ts_col is None:
+                # Assume first column is timestamp
+                ts_col = sgd_df.columns[0]
+
+            sgd_df[ts_col] = pd.to_datetime(sgd_df[ts_col])
+            sgd_map = sgd_df.set_index(ts_col)["sgdfnet_pred"].to_dict()
+            df["sgdfnet_pred"] = df["ds"].map(sgd_map)
+            logger.info("Loaded SGDFNet predictions from %s", sgdfnet_pred_path)
+            has_sgdfnet = True
+        else:
+            logger.warning("SGDFNet predictions file not found: %s", sgdfnet_pred_path)
+
+    if not has_sgdfnet:
+        if allow_fallback:
+            logger.info("sgdfnet_pred not found — using da_anchor as placeholder")
+            df["sgdfnet_pred"] = df["da_anchor"]
+        else:
+            raise ValueError(
+                "Missing sgdfnet_pred for formal training. "
+                "Provide SGDFNet predictions via --sgdfnet-predictions "
+                "or use --allow-sgdfnet-fallback for smoke only."
+            )
+
+    # Handle NaN in sgdfnet_pred
+    if "sgdfnet_pred" in df.columns:
         mask = df["sgdfnet_pred"].isna()
         if mask.any():
-            df.loc[mask, "sgdfnet_pred"] = df.loc[mask, "da_anchor"]
+            if allow_fallback:
+                df.loc[mask, "sgdfnet_pred"] = df.loc[mask, "da_anchor"]
+                logger.warning(
+                    "Filled %d NaN sgdfnet_pred values with da_anchor (fallback)",
+                    int(mask.sum()),
+                )
+            else:
+                raise ValueError(
+                    f"sgdfnet_pred has {int(mask.sum())} NaN values. "
+                    "Provide complete predictions or use --allow-sgdfnet-fallback."
+                )
 
     # Also create forecast_price alias if missing (feature contract expects it)
     if "forecast_price" not in df.columns and "da_anchor" in df.columns:
@@ -644,6 +723,7 @@ def run_training(
     profile: dict,
     target_month: str,
     output_dir: Path,
+    feature_info: dict | None = None,
 ) -> dict:
     """Run full training pipeline for a single target month.
 
@@ -688,6 +768,9 @@ def run_training(
         target_month=target_month,
         val_days=val_days,
         train_min_days=train_min_days,
+        allow_sgdfnet_fallback=(
+            args.allow_sgdfnet_fallback or args.fast_dev_run
+        ),
     )
 
     logger.info(
@@ -875,6 +958,16 @@ def run_training(
         "n_train_days": train_ds.n_days,
         "n_val_days": val_ds.n_days,
         "n_test_days": test_ds.n_days,
+        # Phase DeepFinal-2 feature pipeline info
+        "feature_mode": args.feature_mode,
+        "n_features": input_dim,
+        "sgdfnet_fallback_used": args.allow_sgdfnet_fallback or args.fast_dev_run,
+        "sgdfnet_coverage": manifest.get("sgdfnet_coverage", 0.0),
+        "feature_verdict": (feature_info or {}).get("verdict", "unknown"),
+        "required_present": (feature_info or {}).get("required_present", []),
+        "required_missing": (feature_info or {}).get("required_missing", []),
+        "calendar_feature_generated": (feature_info or {}).get("calendar_feature_generated", False),
+        "lag_feature_coverage": (feature_info or {}).get("lag_feature_coverage", 0.0),
     }
     with open(output_dir / "train_manifest.json", "w", encoding="utf-8") as f:
         json.dump(train_manifest, f, indent=2, ensure_ascii=False)
@@ -981,12 +1074,87 @@ def main() -> None:
     profile = MODEL_PROFILES[args.model_profile]
     logger.info("Model profile: %s — %s", args.model_profile, profile["description"])
 
-    # Load data
-    raw_df = load_raw_data(args.data_path)
+    # ── Feature mode setup ──────────────────────────────────────────
+    is_minimal = args.feature_mode == "minimal"
+    if is_minimal and not args.fast_dev_run and not args.feature_audit_only:
+        logger.warning(
+            "feature_mode=minimal is for smoke only — "
+            "do NOT use for formal training evaluation."
+        )
+
+    # ── Load data ───────────────────────────────────────────────────
+    raw_df = load_raw_data(
+        args.data_path,
+        sgdfnet_pred_path=args.sgdfnet_predictions,
+        allow_fallback=args.allow_sgdfnet_fallback or args.fast_dev_run,
+    )
 
     # Filter date range
     if args.start_date or args.end_date:
         raw_df = filter_date_range(raw_df, args.start_date, args.end_date)
+
+    # ── Feature building (full mode) ────────────────────────────────
+    feature_info: dict = {}
+
+    if args.feature_mode == "full":
+        from models.deep_sgdf_delta.realtime_feature_builder import (
+            build_realtime_features,
+            audit_feature_coverage,
+        )
+
+        logger.info("Building full feature set via realtime_feature_builder...")
+
+        raw_df = build_realtime_features(
+            raw_df,
+            sgdfnet_pred_df=None,  # already merged in load_raw_data
+            mode="FULL_DAY",
+            allow_sgdfnet_fallback=(
+                args.allow_sgdfnet_fallback or args.fast_dev_run
+            ),
+        )
+
+        # Audit features
+        audit = audit_feature_coverage(raw_df)
+        feature_info = audit
+        feature_info["feature_mode"] = "full"
+
+        logger.info(
+            "Feature audit: n_features=%d, verdict=%s, sgdfnet_coverage=%.1f%%",
+            audit["n_features"], audit["verdict"], audit["sgdfnet_coverage"],
+        )
+
+        if audit["required_missing"]:
+            logger.warning(
+                "Missing required features: %s", audit["required_missing"],
+            )
+            if args.strict_feature_contract:
+                raise ValueError(
+                    f"Strict feature contract: missing required features: "
+                    f"{audit['required_missing']}"
+                )
+
+        if args.feature_audit_only:
+            print()
+            print("=" * 60)
+            print("  Feature Audit Only — exiting")
+            print("=" * 60)
+            audit_report_dir = PROJECT_ROOT / "reports" / "local" / "deep_final" / "features"
+            audit_report_dir.mkdir(parents=True, exist_ok=True)
+            import json
+            with open(audit_report_dir / "realtime_feature_audit.json", "w") as f:
+                json.dump(audit, f, indent=2, default=str)
+            print(f"  Audit saved to {audit_report_dir / 'realtime_feature_audit.json'}")
+            print(f"  Verdict: {audit['verdict']}")
+            print(f"  n_features: {audit['n_features']}")
+            return
+    else:
+        # Minimal mode: use raw columns only
+        feature_info = {
+            "feature_mode": "minimal",
+            "n_features": len([c for c in ALL_FEATURES if c in raw_df.columns]),
+            "verdict": "MINIMAL_MODE",
+        }
+        logger.info("Minimal feature mode — using raw data columns only")
 
     # Determine target months
     if args.target_months:
@@ -1019,7 +1187,8 @@ def main() -> None:
         else:
             month_out_dir = base_out_dir
 
-        result = run_training(raw_df, args, profile, target_month, month_out_dir)
+        result = run_training(raw_df, args, profile, target_month, month_out_dir,
+                              feature_info=feature_info)
         result["target_month"] = target_month
         result["output_dir"] = str(month_out_dir)
         results.append(result)

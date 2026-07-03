@@ -74,6 +74,10 @@ def _make_synthetic_df(
             }
             if with_rt_actual:
                 row["rt_actual"] = row["forecast_price"] + np.random.randn() * 15
+
+            # Provide sgdfnet_pred (real prediction, not placeholder)
+            row["sgdfnet_pred"] = row.get("rt_actual", row["forecast_price"]) + np.random.randn() * 5
+
             rows.append(row)
 
     return pd.DataFrame(rows)

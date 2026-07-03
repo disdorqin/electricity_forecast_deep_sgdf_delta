@@ -16,8 +16,26 @@ logger = logging.getLogger(__name__)
 # ── Feature groups ───────────────────────────────────────────────────
 
 FORECAST_FEATURES = [
-    "forecast_price",  # day-ahead anchor price
-    # SGDFNet forecast columns (imported dynamically via sgdfnet_bridge)
+    "forecast_price",              # day-ahead anchor price
+    "load_forecast",               # day-ahead load forecast (optional, data-source dependent)
+    "renewable_forecast",          # day-ahead renewable forecast
+    "wind_forecast",               # day-ahead wind forecast
+    "solar_forecast",              # day-ahead solar forecast
+    "tie_line_forecast",           # tie-line / interconnection forecast
+    "bidding_space_forecast",      # bidding space forecast
+    "local_plant_forecast",        # local plant forecast
+    "nuclear_forecast",            # nuclear forecast
+    "self_supply_forecast",        # self-supply unit forecast
+    "test_unit_forecast",          # test unit forecast
+    "dispatched_load_forecast",    # dispatched load forecast
+    "provincial_load_forecast",    # provincial load forecast (optional)
+]
+
+# Features that are not expected to be present in all data sources.
+# These will be zero-filled if missing.
+OPTIONAL_FORECAST_FEATURES = [
+    "load_forecast",
+    "provincial_load_forecast",
 ]
 
 CALENDAR_FEATURES = [
@@ -38,8 +56,10 @@ LAG_FEATURES = [
 ]
 
 SGDFNET_FEATURES = [
-    "sgdfnet_pred",  # SGDFNet realtime prediction
-    "sgdfnet_residual_lag_1h",  # lagged SGDFNet residual
+    "sgdfnet_pred",                # SGDFNet realtime prediction
+    "sgdfnet_residual_lag_1h",     # lagged SGDFNet residual (1 hour)
+    "sgdfnet_residual_lag_24h",    # lagged SGDFNet residual (24 hours)
+    "sgdfnet_residual_mean_7d",    # 7-day rolling mean of SGDFNet residual
 ]
 
 OPTIONAL_TEACHER_FEATURES = [
@@ -50,8 +70,15 @@ OPTIONAL_TEACHER_FEATURES = [
 
 # ── Full feature list ────────────────────────────────────────────────
 
-REQUIRED_FEATURES = FORECAST_FEATURES + CALENDAR_FEATURES + LAG_FEATURES
-OPTIONAL_FEATURES = SGDFNET_FEATURES + OPTIONAL_TEACHER_FEATURES
+REQUIRED_FEATURES = (
+    [c for c in FORECAST_FEATURES if c not in OPTIONAL_FORECAST_FEATURES]
+    + CALENDAR_FEATURES + LAG_FEATURES
+)
+OPTIONAL_FEATURES = (
+    OPTIONAL_FORECAST_FEATURES
+    + SGDFNET_FEATURES
+    + OPTIONAL_TEACHER_FEATURES
+)
 ALL_FEATURES = REQUIRED_FEATURES + OPTIONAL_FEATURES
 
 # ── Feature version ──────────────────────────────────────────────────

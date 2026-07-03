@@ -74,19 +74,79 @@ def _ensure_da_anchor(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def _ensure_sgdfnet_pred(frame: pd.DataFrame) -> pd.DataFrame:
-    """Ensure ``sgdfnet_pred`` exists; fall back to ``da_anchor`` if missing."""
+def _ensure_sgdfnet_pred(
+    frame: pd.DataFrame,
+    *,
+    allow_fallback: bool = False,
+) -> pd.DataFrame:
+    """Ensure ``sgdfnet_pred`` exists.
+
+    Args:
+        frame: Input DataFrame.
+        allow_fallback: If ``True``, missing ``sgdfnet_pred`` values are
+            filled from ``da_anchor``.  If ``False`` (default), missing
+            ``sgdfnet_pred`` raises ``ValueError``.
+
+    Returns:
+        DataFrame with ``sgdfnet_pred`` column guaranteed to be present.
+
+    Raises:
+        ValueError: If ``sgdfnet_pred`` is missing or has NaN values and
+            *allow_fallback* is ``False``.
+    """
     frame = frame.copy()
+    n_missing_total = 0
+    fallback_used = False
+
     if "sgdfnet_pred" not in frame.columns:
-        logger.info(
-            "sgdfnet_pred not found — falling back to da_anchor as placeholder."
-        )
-        frame["sgdfnet_pred"] = frame["da_anchor"]
+        if allow_fallback:
+            if "da_anchor" in frame.columns:
+                frame["sgdfnet_pred"] = frame["da_anchor"]
+                fallback_used = True
+                n_missing_total = len(frame)
+                logger.warning(
+                    "sgdfnet_pred not found — fallback to da_anchor (%d rows). "
+                    "This is only acceptable for smoke/predict runs.",
+                    n_missing_total,
+                )
+            else:
+                raise ValueError(
+                    "Cannot fallback: neither sgdfnet_pred nor da_anchor present."
+                )
+        else:
+            raise ValueError(
+                "Missing sgdfnet_pred for formal training. "
+                "Provide SGDFNet predictions or use --allow-sgdfnet-fallback "
+                "for smoke only."
+            )
     else:
-        # Fill NaN in sgdfnet_pred with da_anchor
+        # Column exists — check for NaN
         mask = frame["sgdfnet_pred"].isna()
-        if mask.any():
-            frame.loc[mask, "sgdfnet_pred"] = frame.loc[mask, "da_anchor"]
+        n_nan = int(mask.sum())
+        if n_nan > 0:
+            if allow_fallback:
+                frame.loc[mask, "sgdfnet_pred"] = frame.loc[mask, "da_anchor"]
+                fallback_used = True
+                n_missing_total = n_nan
+                logger.warning(
+                    "sgdfnet_pred has %d NaN rows — fallback to da_anchor. "
+                    "This is only acceptable for smoke/predict runs.",
+                    n_nan,
+                )
+            else:
+                raise ValueError(
+                    f"sgdfnet_pred has {n_nan} NaN values in formal training. "
+                    "Provide complete SGDFNet predictions or use "
+                    "--allow-sgdfnet-fallback for smoke only."
+                )
+
+    # Store coverage metadata on the frame
+    total_rows = len(frame)
+    n_present = total_rows - n_missing_total
+    coverage_pct = (n_present / total_rows * 100) if total_rows > 0 else 0.0
+    frame.attrs["sgdfnet_fallback_used"] = fallback_used
+    frame.attrs["sgdfnet_coverage"] = coverage_pct
+
     return frame
 
 
@@ -118,6 +178,8 @@ class RealtimeDayDataset(Dataset):
             to ``ALL_FEATURES`` from the contract.
         mode: ``"train"``, ``"val"``, ``"test"``, or ``"predict"``.
         cutoff_hour: Leakage cutoff hour (default 15).
+        allow_sgdfnet_fallback: If ``True``, missing ``sgdfnet_pred``
+            is filled from ``da_anchor``.  Only for smoke/predict runs.
 
     Raises:
         ValueError: If required columns are missing (checked via the
@@ -134,6 +196,7 @@ class RealtimeDayDataset(Dataset):
         *,
         mode: Literal["train", "val", "test", "predict"] = "train",
         cutoff_hour: int = 15,
+        allow_sgdfnet_fallback: bool = False,
     ):
         self.mode = mode
         self.cutoff_hour = cutoff_hour
@@ -146,7 +209,7 @@ class RealtimeDayDataset(Dataset):
             frame = add_business_time_columns(frame, timestamp_col="ds")
 
         frame = _ensure_da_anchor(frame)
-        frame = _ensure_sgdfnet_pred(frame)
+        frame = _ensure_sgdfnet_pred(frame, allow_fallback=allow_sgdfnet_fallback)
 
         # Ensure numeric types
         frame["business_day"] = pd.to_datetime(frame["business_day"]).dt.normalize()
@@ -340,6 +403,7 @@ def build_training_datasets_final(
     val_days: int = 30,
     train_min_days: int = 90,
     cutoff_hour: int = 15,
+    allow_sgdfnet_fallback: bool = False,
 ) -> tuple[RealtimeDayDataset, RealtimeDayDataset, RealtimeDayDataset, dict]:
     """Build train / val / test datasets with walk-forward split.
 
@@ -376,7 +440,7 @@ def build_training_datasets_final(
     frame = raw_df.copy()
     frame = add_business_time_columns(frame, timestamp_col="ds")
     frame = _ensure_da_anchor(frame)
-    frame = _ensure_sgdfnet_pred(frame)
+    frame = _ensure_sgdfnet_pred(frame, allow_fallback=allow_sgdfnet_fallback)
 
     # ── Determine split boundaries ───────────────────────────────
     target_ts = pd.Timestamp(target_month)
@@ -433,12 +497,15 @@ def build_training_datasets_final(
     # ── Build datasets ───────────────────────────────────────────
     train_ds = RealtimeDayDataset(
         train_frame, resolved_cols, mode="train", cutoff_hour=cutoff_hour,
+        allow_sgdfnet_fallback=allow_sgdfnet_fallback,
     )
     val_ds = RealtimeDayDataset(
         val_frame, resolved_cols, mode="val", cutoff_hour=cutoff_hour,
+        allow_sgdfnet_fallback=allow_sgdfnet_fallback,
     )
     test_ds = RealtimeDayDataset(
         test_frame, resolved_cols, mode="test", cutoff_hour=cutoff_hour,
+        allow_sgdfnet_fallback=allow_sgdfnet_fallback,
     )
 
     # ── Build manifest ───────────────────────────────────────────
@@ -461,6 +528,8 @@ def build_training_datasets_final(
         "val_days": val_days,
         "cutoff_hour": cutoff_hour,
         "leakage_checks_passed": leakage_ok,
+        "sgdfnet_fallback_used": frame.attrs.get("sgdfnet_fallback_used", False),
+        "sgdfnet_coverage": frame.attrs.get("sgdfnet_coverage", 0.0),
     })
 
     logger.info(
@@ -479,6 +548,7 @@ def build_predict_dataset_final(
     target_day: pd.Timestamp | str,
     feature_cols: list[str] | None = None,
     cutoff_hour: int = 15,
+    allow_sgdfnet_fallback: bool = True,
 ) -> tuple[RealtimeDayDataset, dict]:
     """Build a prediction dataset for a single target business day.
 
@@ -506,7 +576,7 @@ def build_predict_dataset_final(
     frame = raw_df.copy()
     frame = add_business_time_columns(frame, timestamp_col="ds")
     frame = _ensure_da_anchor(frame)
-    frame = _ensure_sgdfnet_pred(frame)
+    frame = _ensure_sgdfnet_pred(frame, allow_fallback=allow_sgdfnet_fallback)
 
     # Filter to the target day
     target_frame = frame[frame["business_day"] == target_day].copy()
@@ -532,6 +602,7 @@ def build_predict_dataset_final(
 
     ds = RealtimeDayDataset(
         target_frame, resolved_cols, mode="predict", cutoff_hour=cutoff_hour,
+        allow_sgdfnet_fallback=allow_sgdfnet_fallback,
     )
 
     manifest = build_feature_manifest(
@@ -546,6 +617,8 @@ def build_predict_dataset_final(
         "cutoff_hour": cutoff_hour,
         "leakage_checks_passed": leakage_ok,
         "mode": "predict",
+        "sgdfnet_fallback_used": target_frame.attrs.get("sgdfnet_fallback_used", False),
+        "sgdfnet_coverage": target_frame.attrs.get("sgdfnet_coverage", 0.0),
     })
 
     logger.info(
