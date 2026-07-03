@@ -716,7 +716,17 @@ def main() -> None:
     # ── 4. Run SGDFNet Protocol B cutoff experiment ───────────────
     logger.info("Running SGDFNet Protocol B cutoff walk-forward experiment ...")
     try:
-        run_dir = run_protocol_b_cutoff_experiment(str(sgdfnet_config))
+        # SGDFNet config uses relative data paths (data/shandong_pmos_hourly.xlsx)
+        # relative to the parent project root (electricity_forecast_model2.0_exp/)
+        import os
+        orig_cwd = os.getcwd()
+        project_root = sgdfnet_root.parent  # electricity_forecast_model2.0_exp/
+        try:
+            os.chdir(str(project_root))
+            logger.info(f"Changed CWD to project root: {project_root}")
+            run_dir = run_protocol_b_cutoff_experiment(str(sgdfnet_config))
+        finally:
+            os.chdir(orig_cwd)
         run_dir = Path(run_dir)
         logger.info(f"SGDFNet experiment completed.  Output dir: {run_dir}")
     except Exception:
