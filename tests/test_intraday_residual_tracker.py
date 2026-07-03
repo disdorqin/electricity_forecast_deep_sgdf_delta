@@ -121,13 +121,13 @@ class TestPredictIntradayCorrection:
     """Tests for predict_intraday_correction()."""
 
     def test_output_columns(self):
-        """Output has expected columns."""
+        """Output has expected Phase 10 columns."""
         obs = _make_observed_data()
         state = compute_intraday_residual_state(obs, "2026-02-15", cutoff_hour=11)
         future = _make_future_data()
         result = predict_intraday_correction(future, state)
-        for col in ["intraday_raw_correction", "intraday_correction_weight",
-                     "intraday_correction", "intraday_corrected_pred"]:
+        for col in ["intraday_base_correction", "intraday_model_weight",
+                     "intraday_pre_guardrail_correction", "intraday_corrected_pred"]:
             assert col in result.columns
 
     def test_insufficient_observations_no_correction(self):
@@ -137,7 +137,7 @@ class TestPredictIntradayCorrection:
         future = _make_future_data()
         config = IntradayTrackerConfig(min_observed_hours=2)
         result = predict_intraday_correction(future, state, config)
-        assert (result["intraday_correction"] == 0.0).all()
+        assert (result["intraday_pre_guardrail_correction"] == 0.0).all()
 
     def test_positive_bias_gives_positive_correction(self):
         """Positive bias → positive correction (adding to prediction)."""
@@ -145,7 +145,7 @@ class TestPredictIntradayCorrection:
         state = compute_intraday_residual_state(obs, "2026-02-15", cutoff_hour=11)
         future = _make_future_data()
         result = predict_intraday_correction(future, state)
-        assert (result["intraday_correction"] > 0).all()
+        assert (result["intraday_pre_guardrail_correction"] > 0).all()
 
     def test_correction_clipped(self):
         """Correction is clipped to max_abs_correction."""
@@ -156,24 +156,24 @@ class TestPredictIntradayCorrection:
         future = _make_future_data()
         config = IntradayTrackerConfig(max_abs_correction=50.0)
         result = predict_intraday_correction(future, state, config)
-        assert (result["intraday_correction"].abs() <= 50.0).all()
+        assert (result["intraday_pre_guardrail_correction"].abs() <= 50.0).all()
 
     def test_corrected_pred_formula(self):
-        """corrected_pred = sgdfnet_pred + correction."""
+        """corrected_pred = sgdfnet_pred + pre_guardrail_correction."""
         obs = _make_observed_data()
         state = compute_intraday_residual_state(obs, "2026-02-15", cutoff_hour=11)
         future = _make_future_data()
         result = predict_intraday_correction(future, state)
-        expected = result["sgdfnet_pred"].values + result["intraday_correction"].values
+        expected = result["sgdfnet_pred"].values + result["intraday_pre_guardrail_correction"].values
         np.testing.assert_allclose(result["intraday_corrected_pred"].values, expected)
 
     def test_distance_decay(self):
-        """Further hours from cutoff get smaller corrections."""
+        """Further hours from cutoff get smaller model_weight."""
         obs = _make_observed_data()
         state = compute_intraday_residual_state(obs, "2026-02-15", cutoff_hour=11)
         future = _make_future_data(hours=[12, 13, 14, 15, 16])
         result = predict_intraday_correction(future, state)
-        weights = result["intraday_correction_weight"].values
+        weights = result["intraday_model_weight"].values
         # Weight should decrease with distance
         for i in range(len(weights) - 1):
             assert weights[i] >= weights[i + 1]
@@ -199,7 +199,7 @@ class TestApplyIntradayCorrection:
         config = IntradayTrackerConfig(negative_price_guardrail=True, negative_price_weight=0.3)
         result = apply_intraday_correction(future, state, config)
         assert result.iloc[0]["guardrail_reason"] == "negative_price_risk"
-        assert result.iloc[0]["intraday_correction_weight"] < 1.0
+        assert result.iloc[0]["intraday_guardrail_weight"] < 1.0
 
     def test_past_hours_not_corrected(self):
         """Hours <= cutoff_hour get zero correction."""
@@ -221,3 +221,69 @@ class TestApplyIntradayCorrection:
         config = IntradayTrackerConfig(min_observed_hours=2, min_confidence=0.5)
         result = apply_intraday_correction(future, state, config)
         assert (result["intraday_correction"] == 0.0).all()
+
+
+class TestPhase10CorrectionPipeline:
+    """Phase 10: verify clarified correction pipeline."""
+
+    def test_base_correction_constant(self):
+        """base_correction does NOT change with target hour distance."""
+        obs = _make_observed_data()
+        state = compute_intraday_residual_state(obs, "2026-02-15", cutoff_hour=11)
+        future = _make_future_data(hours=[12, 13, 14, 15, 16])
+        result = predict_intraday_correction(future, state)
+        base_vals = result["intraday_base_correction"].values
+        # All base_correction values should be identical (same scalar)
+        np.testing.assert_allclose(base_vals, base_vals[0])
+
+    def test_model_weight_decreases_with_distance(self):
+        """model_weight decreases as target_hour moves further from cutoff."""
+        obs = _make_observed_data()
+        state = compute_intraday_residual_state(obs, "2026-02-15", cutoff_hour=11)
+        future = _make_future_data(hours=[12, 13, 14, 15, 16])
+        result = predict_intraday_correction(future, state)
+        weights = result["intraday_model_weight"].values
+        for i in range(len(weights) - 1):
+            assert weights[i] > weights[i + 1], (
+                f"model_weight should decrease: weight[{i}]={weights[i]} <= weight[{i+1}]={weights[i+1]}"
+            )
+
+    def test_guardrail_weight_decreases_for_negative(self):
+        """guardrail_weight is lower for negative da_anchor."""
+        obs = _make_observed_data()
+        state = compute_intraday_residual_state(obs, "2026-02-15", cutoff_hour=11)
+        future = _make_future_data()
+        future.loc[0, "da_anchor"] = -10.0
+        config = IntradayTrackerConfig(negative_price_weight=0.3)
+        result = apply_intraday_correction(future, state, config)
+        # First row (negative) should have lower guardrail weight
+        neg_w = result.iloc[0]["intraday_guardrail_weight"]
+        pos_w = result.iloc[1]["intraday_guardrail_weight"]
+        assert neg_w < pos_w
+
+    def test_final_equals_base_times_model_times_guardrail(self):
+        """final_correction = base * model_weight * guardrail_weight."""
+        obs = _make_observed_data()
+        state = compute_intraday_residual_state(obs, "2026-02-15", cutoff_hour=11)
+        future = _make_future_data()
+        result = apply_intraday_correction(future, state)
+        for i in range(len(result)):
+            base = result.iloc[i]["intraday_base_correction"]
+            mw = result.iloc[i]["intraday_model_weight"]
+            gw = result.iloc[i]["intraday_guardrail_weight"]
+            final = result.iloc[i]["intraday_final_correction"]
+            expected = np.clip(base * mw * gw, -80.0, 80.0)
+            assert abs(final - expected) < 1e-6, (
+                f"Row {i}: final={final} != base*model*guardrail={expected}"
+            )
+
+    def test_backward_compat_correction_alias(self):
+        """intraday_correction is an alias for intraday_final_correction."""
+        obs = _make_observed_data()
+        state = compute_intraday_residual_state(obs, "2026-02-15", cutoff_hour=11)
+        future = _make_future_data()
+        result = apply_intraday_correction(future, state)
+        np.testing.assert_array_equal(
+            result["intraday_correction"].values,
+            result["intraday_final_correction"].values,
+        )

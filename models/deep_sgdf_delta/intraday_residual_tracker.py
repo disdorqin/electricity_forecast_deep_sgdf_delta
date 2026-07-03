@@ -167,23 +167,23 @@ def predict_intraday_correction(
 ) -> pd.DataFrame:
     """Predict correction for future hours based on observed state.
 
+    Correction pipeline (Phase 10 clarified naming):
+      intraday_base_correction: unweighted base signal from state
+      intraday_model_weight: confidence * distance_decay * std_penalty
+      intraday_pre_guardrail_correction: base * model_weight
+
     Parameters
     ----------
     future_rows : pd.DataFrame
         Must contain: hour_business, sgdfnet_pred.
-        Only hours > cutoff_hour should be included.
     state : IntradayResidualState
-        State from compute_intraday_residual_state.
     config : IntradayTrackerConfig, optional
-        Tracker configuration.
 
     Returns
     -------
-    pd.DataFrame with added columns:
-        - intraday_raw_correction: unguarded correction
-        - intraday_correction_weight: weight applied
-        - intraday_correction: guarded correction
-        - intraday_corrected_pred: sgdfnet_pred + correction
+    pd.DataFrame with columns:
+        intraday_base_correction, intraday_model_weight,
+        intraday_pre_guardrail_correction, intraday_corrected_pred (preliminary)
     """
     if config is None:
         config = IntradayTrackerConfig()
@@ -191,27 +191,25 @@ def predict_intraday_correction(
     df = future_rows.copy()
 
     if state.n_observed < config.min_observed_hours:
-        # Not enough observed data — no correction
-        df["intraday_raw_correction"] = 0.0
-        df["intraday_correction_weight"] = 0.0
-        df["intraday_correction"] = 0.0
+        df["intraday_base_correction"] = 0.0
+        df["intraday_model_weight"] = 0.0
+        df["intraday_pre_guardrail_correction"] = 0.0
         df["intraday_corrected_pred"] = df["sgdfnet_pred"]
         return df
 
-    # Base correction: weighted combination of state signals
-    # Weights: mean=0.4, ewm=0.35, last=0.25
+    # Base correction: weighted combination of state signals (UNWEIGHTED by distance/confidence)
     base_correction = (
         0.40 * state.mean_residual_today
         + 0.35 * state.ewm_residual_today
         + 0.25 * state.last_residual
     )
 
-    # Per-hour adjustments
-    corrections = []
-    weights = []
+    # Per-hour model weight
+    model_weights = []
+    pre_guardrail_corrections = []
     for _, row in df.iterrows():
         target_hour = int(row["hour_business"])
-        distance = target_hour - state.cutoff_hour  # hours ahead
+        distance = target_hour - state.cutoff_hour
 
         # Distance decay: further from cutoff → less confident
         decay_weight = np.exp(-config.distance_decay * distance)
@@ -219,20 +217,21 @@ def predict_intraday_correction(
         # Std penalty: high variability → less correction
         std_penalty = max(0.3, 1.0 - state.residual_std_today / 300.0)
 
-        # Combined weight
+        # Model weight = confidence * decay * std_penalty
         w = state.confidence * decay_weight * std_penalty
         w = max(0.0, min(1.0, w))
 
-        corrections.append(base_correction * w)
-        weights.append(w)
+        model_weights.append(w)
+        pre_guardrail_corrections.append(base_correction * w)
 
-    df["intraday_raw_correction"] = corrections
-    df["intraday_correction_weight"] = weights
-
-    # Clip correction magnitude
-    clipped = np.clip(corrections, -config.max_abs_correction, config.max_abs_correction)
-    df["intraday_correction"] = clipped
-    df["intraday_corrected_pred"] = df["sgdfnet_pred"].values + clipped
+    df["intraday_base_correction"] = base_correction
+    df["intraday_model_weight"] = model_weights
+    df["intraday_pre_guardrail_correction"] = np.clip(
+        pre_guardrail_corrections, -config.max_abs_correction, config.max_abs_correction
+    )
+    df["intraday_corrected_pred"] = (
+        df["sgdfnet_pred"].values + df["intraday_pre_guardrail_correction"].values
+    )
 
     return df
 
@@ -244,23 +243,25 @@ def apply_intraday_correction(
 ) -> pd.DataFrame:
     """Apply intraday correction with full guardrail.
 
-    Combines predict_intraday_correction with additional guardrails:
-    - Negative price guardrail
-    - Only future hours
-    - Minimum observed hours check
+    Correction pipeline (Phase 10):
+      intraday_base_correction: unweighted base signal
+      intraday_model_weight: confidence * distance_decay * std_penalty
+      intraday_pre_guardrail_correction: base * model_weight
+      intraday_guardrail_weight: negative/cutoff/confidence guardrail
+      intraday_final_correction: pre_guardrail * guardrail_weight
+      intraday_corrected_pred: sgdfnet_pred + final_correction
+      intraday_correction: alias for intraday_final_correction (backward compat)
 
     Parameters
     ----------
     future_rows : pd.DataFrame
-        Must contain: hour_business, sgdfnet_pred, da_anchor (optional for neg guardrail).
+        Must contain: hour_business, sgdfnet_pred, da_anchor (optional).
     state : IntradayResidualState
-        State from compute_intraday_residual_state.
     config : IntradayTrackerConfig, optional
 
     Returns
     -------
-    pd.DataFrame with correction columns plus:
-        - guardrail_reason: why guardrail was applied (empty if none)
+    pd.DataFrame with all correction columns plus guardrail_reason.
     """
     if config is None:
         config = IntradayTrackerConfig()
@@ -268,12 +269,12 @@ def apply_intraday_correction(
     df = predict_intraday_correction(future_rows, state, config)
     n = len(df)
     reasons = [""] * n
-    weight = df["intraday_correction_weight"].values.copy()
+    guardrail_weight = np.ones(n, dtype=float)
 
     # Guardrail 1: only future hours (target > cutoff)
     if config.apply_only_future_hours:
         past_mask = df["hour_business"].values <= state.cutoff_hour
-        weight[past_mask] = 0.0
+        guardrail_weight[past_mask] = 0.0
         for i in range(n):
             if past_mask[i] and reasons[i] == "":
                 reasons[i] = "past_hour_not_corrected"
@@ -281,25 +282,26 @@ def apply_intraday_correction(
     # Guardrail 2: negative price risk
     if config.negative_price_guardrail and "da_anchor" in df.columns:
         neg_mask = df["da_anchor"].fillna(0).values < config.negative_price_threshold
-        weight[neg_mask] *= config.negative_price_weight
+        guardrail_weight[neg_mask] *= config.negative_price_weight
         for i in range(n):
             if neg_mask[i] and reasons[i] == "":
                 reasons[i] = "negative_price_risk"
 
-    # Apply weight
-    raw_corr = df["intraday_raw_correction"].values
-    final_corr = raw_corr * weight
-    final_corr = np.clip(final_corr, -config.max_abs_correction, config.max_abs_correction)
-
     # Confidence floor
     if state.confidence < config.min_confidence:
-        final_corr[:] = 0.0
+        guardrail_weight[:] = 0.0
         for i in range(n):
             if reasons[i] == "":
                 reasons[i] = f"low_confidence_{state.confidence:.2f}"
 
-    df["intraday_correction_weight"] = weight
-    df["intraday_correction"] = final_corr
+    # Final correction = pre_guardrail * guardrail_weight
+    pre_guardrail = df["intraday_pre_guardrail_correction"].values
+    final_corr = pre_guardrail * guardrail_weight
+    final_corr = np.clip(final_corr, -config.max_abs_correction, config.max_abs_correction)
+
+    df["intraday_guardrail_weight"] = guardrail_weight
+    df["intraday_final_correction"] = final_corr
+    df["intraday_correction"] = final_corr  # backward compat alias
     df["intraday_corrected_pred"] = df["sgdfnet_pred"].values + final_corr
     df["guardrail_reason"] = reasons
 
