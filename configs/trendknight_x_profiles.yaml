@@ -1,0 +1,133 @@
+# TrendKnight-X v3 — Runtime Profile Configurations
+#
+# Each profile defines a complete set of hyperparameters for training
+# and inference.  Use with:
+#   from models.deep_sgdf_delta.runtime_profiles import load_profiles_from_yaml
+#   profiles = load_profiles_from_yaml("configs/trendknight_x_profiles.yaml")
+
+profiles:
+
+  # ── Debug ──────────────────────────────────────────────────────────
+  debug_cpu:
+    hidden_dim: 32
+    num_layers: 1
+    backbone: tcn
+    multiscale: false
+    use_teacher_gate: false
+    teacher_input_dim: 0
+    epochs: 3
+    patience: 2
+    batch_size: 8
+    learning_rate: 0.001
+    lookback_days: 3
+    val_days: 7
+    teacher_usage: none
+    amp: false
+    max_runtime_minutes: 5.0
+    device: cpu
+
+  # ── Fast TCN baseline ─────────────────────────────────────────────
+  v3_fast_tcn:
+    hidden_dim: 64
+    num_layers: 2
+    backbone: tcn
+    multiscale: false
+    use_teacher_gate: false
+    teacher_input_dim: 0
+    epochs: 25
+    patience: 5
+    batch_size: 64
+    learning_rate: 0.001
+    lookback_days: 7
+    val_days: 30
+    teacher_usage: none
+    amp: false
+    max_runtime_minutes: 15.0
+
+  # ── Fast GRU baseline ─────────────────────────────────────────────
+  v3_fast_gru:
+    hidden_dim: 64
+    num_layers: 2
+    backbone: gru
+    multiscale: false
+    use_teacher_gate: false
+    teacher_input_dim: 0
+    epochs: 25
+    patience: 5
+    batch_size: 64
+    learning_rate: 0.001
+    lookback_days: 7
+    val_days: 30
+    teacher_usage: none
+    amp: false
+    max_runtime_minutes: 15.0
+
+  # ── Full multiscale TCN (recommended) ─────────────────────────────
+  v3_multiscale_tcn:
+    hidden_dim: 96
+    num_layers: 2
+    backbone: tcn
+    multiscale: true
+    use_teacher_gate: false
+    teacher_input_dim: 0
+    epochs: 40
+    patience: 6
+    batch_size: 64
+    learning_rate: 0.001
+    lookback_days: 7
+    val_days: 30
+    teacher_usage: none
+    amp: false
+    max_runtime_minutes: 25.0
+
+  # ── Multiscale + teacher residual distillation ─────────────────────
+  v3_teacher_residual:
+    hidden_dim: 96
+    num_layers: 2
+    backbone: tcn
+    multiscale: true
+    use_teacher_gate: true
+    teacher_input_dim: 3
+    epochs: 50
+    patience: 8
+    batch_size: 64
+    learning_rate: 0.0008
+    weight_decay: 0.0001
+    dropout: 0.15
+    lookback_days: 7
+    val_days: 30
+    teacher_usage: optional
+    amp: true
+    max_runtime_minutes: 30.0
+    w_smape: 0.40
+    w_delta_mae: 0.20
+    w_period: 0.10
+    w_smooth: 0.10
+    w_teacher_distill: 0.15
+    w_confidence_cal: 0.05
+
+  # ── Multiscale + MoE teacher fusion ───────────────────────────────
+  v3_teacher_moe:
+    hidden_dim: 96
+    num_layers: 2
+    backbone: tcn
+    multiscale: true
+    use_teacher_gate: true
+    teacher_input_dim: 3
+    epochs: 50
+    patience: 8
+    batch_size: 48
+    learning_rate: 0.0006
+    weight_decay: 0.00015
+    dropout: 0.15
+    lookback_days: 7
+    val_days: 30
+    teacher_usage: optional
+    amp: true
+    max_runtime_minutes: 35.0
+    w_smape: 0.40
+    w_delta_mae: 0.20
+    w_period: 0.10
+    w_smooth: 0.10
+    w_teacher_distill: 0.12
+    w_confidence_cal: 0.08
