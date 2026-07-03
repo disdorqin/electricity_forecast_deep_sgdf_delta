@@ -1,0 +1,53 @@
+{
+  "feature_version": "v1.0",
+  "feature_columns": [
+    "forecast_price",
+    "sgdfnet_pred"
+  ],
+  "target_columns": [
+    "delta_target",
+    "residual_target"
+  ],
+  "n_features": 2,
+  "n_targets": 2,
+  "date_range": {
+    "start": "2022-01-01",
+    "end": "2026-06-20"
+  },
+  "n_days": 1632,
+  "leakage_checks_passed": true,
+  "required_present": [
+    "forecast_price"
+  ],
+  "optional_present": [
+    "sgdfnet_pred"
+  ],
+  "required_missing": [
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "month_sin",
+    "month_cos",
+    "is_weekend",
+    "is_holiday",
+    "rt_lag_1h",
+    "rt_lag_2h",
+    "rt_lag_3h",
+    "rt_lag_24h",
+    "rt_lag_48h",
+    "rt_mean_6h",
+    "rt_std_6h",
+    "rt_mean_24h",
+    "rt_std_24h",
+    "delta_lag_24h",
+    "delta_lag_48h"
+  ],
+  "n_rows": 39168,
+  "n_train_days": 1462,
+  "n_val_days": 30,
+  "n_test_days": 28,
+  "target_month": "2026-02",
+  "val_days": 30,
+  "cutoff_hour": 15
+}
