@@ -1,0 +1,12 @@
+hgb_learning_rate: 0.1
+hgb_max_depth: 6
+hgb_max_iter: 200
+magnitude_scale: 300.0
+mode: FULL_DAY
+prob_threshold: 0.5
+ridge_alpha: 1.0
+thresholds:
+  abs_large: 150.0
+  clip: 500.0
+  downward: -100.0
+  upward: 100.0
