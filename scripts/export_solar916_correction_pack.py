@@ -49,6 +49,12 @@ def main():
     parser.add_argument("--mode", type=str, default="eval", choices=["eval", "online"])
     parser.add_argument("--base-model-name", type=str, default="sgdfnet")
     parser.add_argument("--out", type=str, default=None)
+    parser.add_argument("--apply-guardrail", action="store_true", default=False,
+                        help="Apply Solar916 guardrail before exporting")
+    parser.add_argument("--max-abs-correction", type=float, default=100.0)
+    parser.add_argument("--disabled-hours", type=str, default="",
+                        help="Comma-separated hours to disable, e.g. '9,11'")
+    parser.add_argument("--negative-risk-weight", type=float, default=0.3)
     args = parser.parse_args()
 
     # Load predictions
@@ -60,6 +66,29 @@ def main():
     if args.metrics and Path(args.metrics).exists():
         with open(args.metrics, encoding="utf-8") as f:
             metrics = json.load(f)
+
+    # Apply guardrail if requested
+    guarded_metrics = None
+    if args.apply_guardrail:
+        from models.deep_sgdf_delta.solar916_guardrail import (
+            Solar916GuardrailConfig,
+            apply_guardrail,
+            compute_guarded_metrics,
+        )
+        disabled_hours = []
+        if args.disabled_hours:
+            disabled_hours = [int(h.strip()) for h in args.disabled_hours.split(",") if h.strip()]
+        gr_config = Solar916GuardrailConfig(
+            max_abs_correction=args.max_abs_correction,
+            disabled_hours=disabled_hours,
+            negative_risk_weight=args.negative_risk_weight,
+        )
+        pred_df = apply_guardrail(pred_df, gr_config)
+        guarded_metrics = compute_guarded_metrics(pred_df)
+        # Override correction columns with guarded versions
+        pred_df["solar916_residual_pred"] = pred_df["solar916_residual_pred_after_guardrail"]
+        pred_df["solar916_corrected_pred"] = pred_df["solar916_corrected_pred"]
+        logger.info("Guardrail applied. Guarded metrics: %s", guarded_metrics["overall"])
 
     # Build correction pack
     pack = pd.DataFrame()
@@ -100,6 +129,22 @@ def main():
     pack.to_csv(out_path, index=False, encoding="utf-8-sig")
     logger.info("Correction pack written to %s (%d rows, mode=%s)",
                 out_path, len(pack), args.mode)
+
+    # Write guarded metrics if guardrail was applied
+    if guarded_metrics is not None:
+        out_dir = Path(out_path).parent
+        # guarded_metrics_summary.json
+        with open(out_dir / "guarded_metrics_summary.json", "w", encoding="utf-8") as f:
+            json.dump(guarded_metrics["overall"], f, ensure_ascii=False, indent=2)
+        # guarded_hourly_metrics.csv
+        pd.DataFrame(guarded_metrics["hourly"]).to_csv(
+            out_dir / "guarded_hourly_metrics.csv", index=False, encoding="utf-8-sig"
+        )
+        # guarded_bucket_metrics.csv
+        pd.DataFrame(guarded_metrics["buckets"]).to_csv(
+            out_dir / "guarded_bucket_metrics.csv", index=False, encoding="utf-8-sig"
+        )
+        logger.info("Guarded metrics written to %s", out_dir)
 
 
 if __name__ == "__main__":

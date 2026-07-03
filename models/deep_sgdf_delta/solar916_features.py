@@ -1,7 +1,13 @@
-"""Solar916 feature engineering.
+"""Solar916 feature engineering — Phase 8 no-leak version.
 
 Builds feature columns for the 9_16 residual correction specialist.
 All features use only information available at prediction time (no future actuals).
+
+CRITICAL FIXES (Phase 8):
+  - Lag features use merge-based same-hour previous-day lookup (not simple shift)
+  - Rolling features use shift(1) to exclude current row (no target leakage)
+  - Same-hour rolling uses groupby(hour_business) + shift(1) + rolling
+  - Features must be computed on FULL dataset before filtering to 9_16
 
 Feature categories:
   - Temporal: hour_business, weekday, month
@@ -75,18 +81,117 @@ def detect_raw_columns(df: pd.DataFrame) -> dict[str, str]:
     return detected
 
 
+def _build_lag_features_merge(df: pd.DataFrame) -> pd.DataFrame:
+    """Build lag features using merge-based same-hour previous-day lookup.
+
+    This is the NO-LEAK approach: instead of shift(1) which just gets the
+    previous row (possibly same day, different hour), we explicitly look up
+    the value at (business_day - N, same hour_business).
+
+    delta_lag_24: previous business_day, same hour_business
+    delta_lag_168: business_day - 7, same hour_business
+    residual_lag_24: previous business_day, same hour_business
+    residual_lag_168: business_day - 7, same hour_business
+    """
+    df = df.copy()
+    df["business_day"] = pd.to_datetime(df["business_day"])
+
+    # Build history lookup frame
+    history = df[["business_day", "hour_business", "delta", "sgdfnet_residual"]].copy()
+    history = history.dropna(subset=["business_day", "hour_business"])
+
+    # ── lag_24: previous business_day, same hour ─────────────────────
+    lag24 = history[["business_day", "hour_business", "delta", "sgdfnet_residual"]].copy()
+    lag24["business_day"] = lag24["business_day"] + pd.Timedelta(days=1)
+    lag24 = lag24.rename(columns={
+        "delta": "delta_lag_24",
+        "sgdfnet_residual": "residual_lag_24",
+    })
+    df = df.merge(
+        lag24[["business_day", "hour_business", "delta_lag_24", "residual_lag_24"]],
+        on=["business_day", "hour_business"],
+        how="left",
+    )
+
+    # ── lag_168: business_day - 7, same hour ─────────────────────────
+    lag168 = history[["business_day", "hour_business", "delta", "sgdfnet_residual"]].copy()
+    lag168["business_day"] = lag168["business_day"] + pd.Timedelta(days=7)
+    lag168 = lag168.rename(columns={
+        "delta": "delta_lag_168",
+        "sgdfnet_residual": "residual_lag_168",
+    })
+    df = df.merge(
+        lag168[["business_day", "hour_business", "delta_lag_168", "residual_lag_168"]],
+        on=["business_day", "hour_business"],
+        how="left",
+    )
+
+    return df
+
+
+def _build_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Build rolling residual features with NO target leakage.
+
+    CRITICAL: All rolling features must shift(1) first to exclude current row.
+    This ensures the current row's residual (the target) does not leak into features.
+
+    rolling_residual_mean_7d: mean of last 7 residuals BEFORE current row
+    rolling_residual_std_7d: std of last 7 residuals BEFORE current row
+    same_hour_residual_mean_7d: groupby hour, shift(1), rolling(7).mean()
+    same_hour_residual_std_7d: groupby hour, shift(1), rolling(7).std()
+    """
+    df = df.copy()
+    df = df.sort_values(["business_day", "hour_business"]).reset_index(drop=True)
+
+    # ── Global rolling (all hours, shift(1) to exclude current) ──────
+    shifted_residual = df["sgdfnet_residual"].shift(1)
+    df["rolling_residual_mean_7d"] = (
+        shifted_residual.rolling(window=7, min_periods=1).mean()
+    )
+    df["rolling_residual_std_7d"] = (
+        shifted_residual.rolling(window=7, min_periods=1).std().fillna(0)
+    )
+
+    # ── Same-hour rolling (groupby hour, shift(1), rolling) ──────────
+    # For each hour_business group, shift(1) then rolling(7)
+    grouped = df.groupby("hour_business")["sgdfnet_residual"]
+    shifted_by_hour = grouped.shift(1)
+    df["same_hour_residual_mean_7d"] = (
+        df.groupby("hour_business")["sgdfnet_residual"]
+        .shift(1)
+        .groupby(df["hour_business"])
+        .rolling(window=7, min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+    df["same_hour_residual_std_7d"] = (
+        df.groupby("hour_business")["sgdfnet_residual"]
+        .shift(1)
+        .groupby(df["hour_business"])
+        .rolling(window=7, min_periods=1)
+        .std()
+        .reset_index(level=0, drop=True)
+        .fillna(0)
+    )
+
+    return df
+
+
 def build_solar916_features(
     df: pd.DataFrame,
     sgdfnet_predictions: Optional[pd.DataFrame] = None,
 ) -> tuple[pd.DataFrame, dict]:
-    """Build all Solar916 features on a DataFrame that already has
-    business_day, hour_business, period, da_price, rt_price columns.
+    """Build all Solar916 features on a DataFrame.
+
+    IMPORTANT: This function should be called on the FULL dataset (all hours)
+    BEFORE filtering to 9_16. The lag/rolling features require the full
+    24-hour context to be correct.
 
     Parameters
     ----------
     df : pd.DataFrame
         Must contain: business_day, hour_business, period, da_price, rt_price.
-        May contain raw Chinese column names for forecast features.
+        Should contain ALL hours (not just 9_16) for correct lag computation.
     sgdfnet_predictions : pd.DataFrame, optional
         Must contain: business_day, hour_business, teacher_pred.
         If None, sgdfnet_pred and residual will be NaN.
@@ -136,7 +241,6 @@ def build_solar916_features(
     df_out["month"] = bd.dt.month
 
     # ── Derived features ─────────────────────────────────────────────
-    # Net load = forecast_load - forecast_new_energy (if both available)
     if "forecast_load" in df_out.columns and "forecast_new_energy" in df_out.columns:
         df_out["net_load"] = (
             pd.to_numeric(df_out["forecast_load"], errors="coerce")
@@ -148,7 +252,6 @@ def build_solar916_features(
         df_out["net_load"] = np.nan
         missing_features.append("forecast_load (needed for net_load)")
 
-    # Renewable share = (solar + wind) / net_load
     has_solar = "forecast_solar" in df_out.columns
     has_wind = "forecast_wind" in df_out.columns
     if has_solar and has_wind and df_out["net_load"].notna().any():
@@ -164,7 +267,6 @@ def build_solar916_features(
         if not has_wind:
             missing_features.append("forecast_wind")
 
-    # Check other features
     for feat in ["forecast_solar", "forecast_new_energy", "bidding_space"]:
         if feat not in df_out.columns:
             missing_features.append(feat)
@@ -172,46 +274,11 @@ def build_solar916_features(
     # ── Delta (rt - da) ──────────────────────────────────────────────
     df_out["delta"] = df_out["rt_price"] - df_out["da_price"]
 
-    # ── Lag features (need sorting by business_day + hour_business) ──
-    df_out = df_out.sort_values(["business_day", "hour_business"]).reset_index(drop=True)
+    # ── Lag features (Phase 8: merge-based, no-leak) ─────────────────
+    df_out = _build_lag_features_merge(df_out)
 
-    # delta_lag_24: same hour yesterday (24h ago = 1 business day)
-    df_out["delta_lag_24"] = df_out["delta"].shift(1)
-    # delta_lag_168: same hour last week (168h = 7 business days)
-    df_out["delta_lag_168"] = df_out["delta"].shift(7)
-
-    # residual_lag_24, residual_lag_168
-    df_out["residual_lag_24"] = df_out["sgdfnet_residual"].shift(1)
-    df_out["residual_lag_168"] = df_out["sgdfnet_residual"].shift(7)
-
-    # ── Rolling stats (7-day window) ─────────────────────────────────
-    # Rolling mean/std of residual over last 7 days
-    df_out["rolling_residual_mean_7d"] = (
-        df_out["sgdfnet_residual"].rolling(window=7, min_periods=1).mean()
-    )
-    df_out["rolling_residual_std_7d"] = (
-        df_out["sgdfnet_residual"].rolling(window=7, min_periods=1).std()
-    )
-
-    # Same-hour residual mean/std over last 7 days
-    # Group by hour_business and compute expanding stats
-    for hour_val in range(9, 17):
-        mask = df_out["hour_business"] == hour_val
-        if mask.sum() == 0:
-            continue
-        idx = df_out.index[mask]
-        rolling_mean = df_out.loc[idx, "sgdfnet_residual"].rolling(
-            window=7, min_periods=1
-        ).mean()
-        rolling_std = df_out.loc[idx, "sgdfnet_residual"].rolling(
-            window=7, min_periods=1
-        ).std()
-        df_out.loc[idx, "same_hour_residual_mean_7d"] = rolling_mean
-        df_out.loc[idx, "same_hour_residual_std_7d"] = rolling_std
-
-    # Fill NaN std with 0 (single-sample windows)
-    df_out["same_hour_residual_std_7d"] = df_out["same_hour_residual_std_7d"].fillna(0)
-    df_out["rolling_residual_std_7d"] = df_out["rolling_residual_std_7d"].fillna(0)
+    # ── Rolling features (Phase 8: shift(1) first, no-leak) ──────────
+    df_out = _build_rolling_features(df_out)
 
     info = {
         "missing_features": list(set(missing_features)),
@@ -230,6 +297,8 @@ def write_feature_manifest(info: dict, output_path: str | Path) -> None:
         "n_samples": info.get("n_samples", 0),
         "target": "sgdfnet_residual",
         "target_description": "rt_actual - sgdfnet_pred",
+        "phase": 8,
+        "leak_fix": True,
     }
     Path(output_path).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"

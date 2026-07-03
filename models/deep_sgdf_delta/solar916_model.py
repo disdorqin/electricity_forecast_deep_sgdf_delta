@@ -35,6 +35,8 @@ class Solar916Config:
     min_samples_leaf: int = 20
     random_state: int = 42
     feature_columns: list[str] = field(default_factory=list)
+    # For small datasets, use simpler model
+    auto_simplify: bool = False
 
 
 # ── Feature columns for the model ────────────────────────────────────
@@ -78,13 +80,27 @@ def get_available_features(df: pd.DataFrame, feature_cols: list[str]) -> list[st
 
 def build_model(config: Solar916Config):
     """Create a model instance based on config."""
+    max_iter = config.max_iter
+    max_depth = config.max_depth
+    min_samples_leaf = config.min_samples_leaf
+    learning_rate = config.learning_rate
+
+    if config.auto_simplify:
+        # Simpler model for small datasets to avoid overfitting
+        max_iter = min(max_iter, 100)
+        max_depth = min(max_depth, 3)
+        min_samples_leaf = max(min_samples_leaf, 10)
+        learning_rate = max(learning_rate, 0.1)
+        logger.info("Auto-simplified model: max_iter=%d, max_depth=%d, min_samples_leaf=%d, lr=%f",
+                     max_iter, max_depth, min_samples_leaf, learning_rate)
+
     if config.model_type == "hist_gradient_boosting":
         from sklearn.ensemble import HistGradientBoostingRegressor
         return HistGradientBoostingRegressor(
-            max_iter=config.max_iter,
-            learning_rate=config.learning_rate,
-            max_depth=config.max_depth,
-            min_samples_leaf=config.min_samples_leaf,
+            max_iter=max_iter,
+            learning_rate=learning_rate,
+            max_depth=max_depth,
+            min_samples_leaf=min_samples_leaf,
             random_state=config.random_state,
         )
     elif config.model_type == "catboost":
@@ -245,3 +261,29 @@ def train_walk_forward(
         "test_actual": y_test,
         "test_df": test_df,
     }
+
+
+def train_multi_month_walk_forward(
+    dataset: pd.DataFrame,
+    target_months: list[str],
+    config: Solar916Config,
+    feature_cols: Optional[list[str]] = None,
+) -> list[dict]:
+    """Train separate walk-forward models for each target month.
+
+    Each month uses only data before that month for training.
+    Returns list of results dicts (one per month).
+    """
+    results = []
+    for month in target_months:
+        logger.info("=" * 60)
+        logger.info("Training for target month: %s", month)
+        logger.info("=" * 60)
+        try:
+            result = train_walk_forward(dataset, month, config, feature_cols)
+            result["target_month"] = month
+            results.append(result)
+        except ValueError as e:
+            logger.warning("Skipping %s: %s", month, e)
+            results.append({"target_month": month, "error": str(e)})
+    return results

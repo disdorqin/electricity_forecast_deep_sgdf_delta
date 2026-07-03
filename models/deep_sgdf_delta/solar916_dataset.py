@@ -125,10 +125,6 @@ def build_solar916_dataset(
     if end_date:
         df = df[df["business_day"] <= pd.Timestamp(end_date)]
 
-    # Filter to 9_16 only
-    df_916 = df[df["period"] == "9_16"].copy()
-    logger.info("9_16 segment: %d rows", len(df_916))
-
     # Load SGDFNet predictions if not provided
     if sgdfnet_predictions is None:
         try:
@@ -139,8 +135,15 @@ def build_solar916_dataset(
     else:
         sgdf_df = sgdfnet_predictions
 
-    # Build features
-    df_916, feat_info = build_solar916_features(df_916, sgdfnet_predictions=sgdf_df)
+    # Phase 8: Build features on FULL dataset BEFORE filtering to 9_16.
+    # This is critical for correct lag/rolling features — they need the
+    # full 24-hour context to compute same-hour previous-day lookups.
+    logger.info("Building features on full dataset: %d rows", len(df))
+    df_full, feat_info = build_solar916_features(df, sgdfnet_predictions=sgdf_df)
+
+    # NOW filter to 9_16 only
+    df_916 = df_full[df_full["period"] == "9_16"].copy()
+    logger.info("9_16 segment after feature build: %d rows", len(df_916))
 
     # Rename for clarity
     df_916 = df_916.rename(columns={"rt_price": "rt_actual"})
