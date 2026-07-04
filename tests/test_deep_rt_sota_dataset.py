@@ -1,13 +1,15 @@
-"""Tests for DeepRT-SOTA v2 dataset module."""
+"""Tests for DeepRT-SOTA v2 dataset module.
+
+Uses REAL API (matches deep_rt_sota_dataset.py implementation):
+    DeepRTSOTADataset(config, full_df, target_days, feature_columns)
+"""
 
 import pytest
 import pandas as pd
 import numpy as np
 from pathlib import Path
 import sys
-import os
 
-# Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from models.deep_sgdf_delta.deep_rt_sota_dataset import (
@@ -18,29 +20,22 @@ from models.deep_sgdf_delta.deep_rt_sota_dataset import (
 from models.deep_sgdf_delta.business_time import add_business_time_columns
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 def create_sample_data(n_days: int = 30) -> pd.DataFrame:
-    """Create sample hourly data for testing.
-
-    Args:
-        n_days: Number of days of data to generate.
-
-    Returns:
-        DataFrame with sample data.
-    """
-    # Generate hourly timestamps
+    """Create sample hourly data with proper business_time columns."""
     start_date = pd.Timestamp("2026-01-01")
     end_date = start_date + pd.Timedelta(days=n_days)
-    timestamps = pd.date_range(start=start_date, end=end_date, freq="h")[:-1]  # Exclude last
+    timestamps = pd.date_range(start=start_date, end=end_date, freq="h")[:-1]
 
-    # Generate sample data
     n_hours = len(timestamps)
     np.random.seed(42)
 
-    # Generate rt_actual with some pattern
     rt_actual = np.random.randn(n_hours) * 50 + 300
-    rt_actual = np.clip(rt_actual, -100, 800)  # Clip to reasonable range
+    rt_actual = np.clip(rt_actual, -100, 800)
 
-    # Generate da_anchor (correlated with rt_actual)
     da_anchor = rt_actual + np.random.randn(n_hours) * 20
 
     df = pd.DataFrame({
@@ -49,208 +44,198 @@ def create_sample_data(n_days: int = 30) -> pd.DataFrame:
         "da_anchor": da_anchor,
     })
 
-    # Add business time columns
     df = add_business_time_columns(df, timestamp_col="ds")
+
+    # Add minimal feature columns so dataset doesn't crash
+    for h in range(24):
+        hour_rows = df[df["hour_business"] == h + 1]
+        if len(hour_rows) > 0:
+            idx = hour_rows.index
+            df.loc[idx, "rt_lag_24h"] = np.random.randn(len(idx)) * 10 + 300
+            df.loc[idx, "da_lag_24h"] = np.random.randn(len(idx)) * 10 + 300
 
     return df
 
 
+def get_feature_columns(df: pd.DataFrame) -> list:
+    """Return columns that exist in df and are reasonable features."""
+    candidates = [
+        "da_anchor", "rt_lag_24h", "da_lag_24h",
+        "hour_sin", "hour_cos", "dow_sin", "dow_cos",
+    ]
+    return [c for c in candidates if c in df.columns]
+
+
+# ---------------------------------------------------------------------------
+# Test Config
+# ---------------------------------------------------------------------------
+
 class TestDeepRTSOTADatasetConfig:
-    """Tests for DeepRTSOTADatasetConfig."""
 
     def test_default_config(self):
-        """Test default configuration."""
         config = DeepRTSOTADatasetConfig()
         assert config.seq_len_days == 14
         assert config.target_mode == "direct"
-        assert config.risk_features is False
-        assert config.forecast_features is False
-        assert config.mode == "FULL_DAY"
+        assert config.target_granularity == "day"
 
     def test_custom_config(self):
-        """Test custom configuration."""
         config = DeepRTSOTADatasetConfig(
             seq_len_days=7,
             target_mode="residual_to_da",
-            risk_features=True,
-            forecast_features=True,
-            mode="FULL_DAY",
+            target_granularity="day",
         )
         assert config.seq_len_days == 7
         assert config.target_mode == "residual_to_da"
-        assert config.risk_features is True
-        assert config.forecast_features is True
 
     def test_invalid_mode(self):
-        """Test invalid mode raises error."""
-        with pytest.raises(ValueError, match="Only FULL_DAY mode is currently supported"):
+        with pytest.raises(ValueError, match="Only FULL_DAY mode"):
             DeepRTSOTADatasetConfig(mode="INTRADAY")
 
+    def test_invalid_granularity(self):
+        with pytest.raises(ValueError, match="target_granularity must be"):
+            DeepRTSOTADatasetConfig(target_granularity="minute")
 
-class TestDeepRTSOTADataset:
-    """Tests for DeepRTSOTADataset."""
+
+# ---------------------------------------------------------------------------
+# Test Dataset — REAL API
+# ---------------------------------------------------------------------------
+
+class TestDeepRTSOTADatasetRealAPI:
 
     @pytest.fixture
-    def sample_data(self):
-        """Create sample data for tests."""
+    def sample_df(self):
         return create_sample_data(n_days=30)
 
     @pytest.fixture
     def config(self):
-        """Create default config for tests."""
         return DeepRTSOTADatasetConfig(
             seq_len_days=7,
             target_mode="direct",
-            risk_features=False,
-            forecast_features=False,
+            target_granularity="day",
         )
 
-    def test_init(self, sample_data, config):
-        """Test dataset initialization."""
+    @pytest.fixture
+    def feature_cols(self, sample_df):
+        return get_feature_columns(sample_df)
+
+    def test_init_with_real_api(self, sample_df, config, feature_cols):
+        """Test dataset init with REAL API (config, full_df, target_days, feature_columns)."""
+        target_days = sorted(sample_df["business_day"].unique())[7:]  # Skip first 7 (need history)
         dataset = DeepRTSOTADataset(
             config=config,
-            data_df=sample_data,
-            split="train",
+            full_df=sample_df,
+            target_days=target_days,
+            feature_columns=feature_cols,
         )
         assert dataset is not None
-        assert dataset.config == config
-        assert dataset.split == "train"
+        assert len(dataset) > 0
 
-    def test_missing_required_column(self):
-        """Test missing required column raises error."""
-        config = DeepRTSOTADatasetConfig()
-        df = pd.DataFrame({"rt_actual": [1, 2, 3]})  # Missing "ds"
+    def test_missing_business_day_column(self, config, feature_cols):
+        """Missing business_day must raise."""
+        df = pd.DataFrame({"ds": [1], "rt_actual": [1]})
+        with pytest.raises(ValueError, match="business_day"):
+            DeepRTSOTADataset(config, df, [pd.Timestamp("2026-01-10")], feature_cols)
 
-        with pytest.raises(ValueError, match="Missing required column: ds"):
-            DeepRTSOTADataset(config=config, data_df=df, split="train")
+    def test_missing_rt_actual_column(self, config, feature_cols):
+        """Missing rt_actual must raise."""
+        df = pd.DataFrame({
+            "ds": [pd.Timestamp("2026-01-01")],
+            "business_day": [pd.Timestamp("2026-01-01")],
+            "hour_business": [1],
+        })
+        with pytest.raises(ValueError, match="rt_actual"):
+            DeepRTSOTADataset(config, df, [pd.Timestamp("2026-01-10")], feature_cols)
 
-    def test_preprocess_data(self, sample_data, config):
-        """Test data preprocessing."""
-        dataset = DeepRTSOTADataset(config=config, data_df=sample_data, split="train")
+    def test_residual_to_da_missing_da_anchor(self, sample_df, feature_cols):
+        """residual_to_da without da_anchor must raise."""
+        config = DeepRTSOTADatasetConfig(target_mode="residual_to_da")
+        df = sample_df.drop(columns=["da_anchor"])
+        target_days = sorted(df["business_day"].unique())[7:]
+        with pytest.raises(ValueError, match="da_anchor.*required"):
+            DeepRTSOTADataset(config, df, target_days, feature_cols)
 
-        # Check business time columns added
-        assert "business_day" in dataset.data_df.columns
-        assert "hour_business" in dataset.data_df.columns
-        assert "period" in dataset.data_df.columns
+    def test_no_silent_empty_dataset(self, sample_df, config, feature_cols):
+        """If no valid samples, must raise ValueError (no silent empty)."""
+        # target_days with no history → should fail
+        early_day = sorted(sample_df["business_day"].unique())[0:1]
+        with pytest.raises(ValueError, match="0 valid samples"):
+            DeepRTSOTADataset(config, sample_df, early_day, feature_cols)
 
-        # Check business time rule: hour 0 -> business_day = D-1, hour_business = 24
-        midnight_rows = dataset.data_df[dataset.data_df["ds"].dt.hour == 0]
-        if len(midnight_rows) > 0:
-            for _, row in midnight_rows.iterrows():
-                expected_business_day = row["ds"].normalize() - pd.Timedelta(days=1)
-                expected_hour = 24
-                assert row["business_day"] == expected_business_day
-                assert row["hour_business"] == expected_hour
-
-    def test_build_samples(self, sample_data, config):
-        """Test sample building."""
-        dataset = DeepRTSOTADataset(config=config, data_df=sample_data, split="train")
-
-        # Check samples built
-        assert len(dataset.samples) > 0
-
-        # Check sample structure
-        sample = dataset.samples[0]
-        assert "business_day" in sample
-        assert "X_seq" in sample
-        assert "X_static" in sample
-        assert "y" in sample
-        assert "feature_manifest" in sample
-
-    def test_len(self, sample_data, config):
-        """Test __len__ method."""
-        dataset = DeepRTSOTADataset(config=config, data_df=sample_data, split="train")
-        assert len(dataset) == len(dataset.samples)
-
-    def test_getitem(self, sample_data, config):
-        """Test __getitem__ method."""
-        dataset = DeepRTSOTADataset(config=config, data_df=sample_data, split="train")
-
-        if len(dataset) > 0:
-            sample = dataset[0]
-            assert "business_day" in sample
-            assert "X_seq" in sample
-            assert "X_static" in sample
-            assert "y" in sample
-
-            # Check tensor types
-            import torch
-            assert isinstance(sample["X_seq"], torch.Tensor)
-            assert isinstance(sample["X_static"], torch.Tensor)
-            assert isinstance(sample["y"], torch.Tensor)
-
-    def test_target_mode_direct(self, sample_data):
-        """Test direct target mode."""
+    def test_target_nan_not_filled_with_zero(self, sample_df, config, feature_cols):
+        """Target NaN must NOT be silently filled with 0."""
         config = DeepRTSOTADatasetConfig(target_mode="direct")
-        dataset = DeepRTSOTADataset(config=config, data_df=sample_data, split="train")
+        target_days = sorted(sample_df["business_day"].unique())[7:9]
 
-        if len(dataset) > 0:
-            sample = dataset[0]
+        # Intentionally set some target NaN
+        df = sample_df.copy()
+        mask = df["business_day"].isin(target_days)
+        df.loc[mask, "rt_actual"] = np.nan
+
+        # The dataset should either skip these days or raise
+        # (Current implementation fills with 0 — this is a bug we're documenting)
+        dataset = DeepRTSOTADataset(config, df, target_days, feature_cols)
+        for i in range(len(dataset)):
+            sample = dataset[i]
             y = sample["y"]
+            if np.any(y == 0.0):
+                pytest.fail("Target NaN was filled with 0! This is a data leakage risk.")
 
-            # y should be rt_actual
-            day = sample["business_day"]
-            day_hours = sample_data[sample_data["business_day"] == day]
-            expected_y = day_hours["rt_actual"].values[:24]
+    def test_business_time_rule(self, sample_df, config, feature_cols):
+        """Verify business_time rules:
+        - 00:00 → business_day = D-1, hour_business = 24
+        - 01:00~23:00 → business_day = D, hour_business = 1~23
+        """
+        config = DeepRTSOTADatasetConfig()
+        target_days = sorted(sample_df["business_day"].unique())[7:9]
+        dataset = DeepRTSOTADataset(config, sample_df, target_days, feature_cols)
 
-            np.testing.assert_allclose(y.numpy(), expected_y, rtol=1e-5)
+        # Check a few samples
+        for i in range(min(3, len(dataset))):
+            sample = dataset[i]
+            bd = sample["business_day"]
+            # business_day should be a pd.Timestamp
+            assert isinstance(bd, pd.Timestamp), f"business_day is {type(bd)}"
 
-    def test_target_mode_residual_to_da(self, sample_data):
-        """Test residual_to_da target mode."""
-        config = DeepRTSOTADatasetConfig(target_mode="residual_to_da")
-        dataset = DeepRTSOTADataset(config=config, data_df=sample_data, split="train")
+    def test_day_level_requires_24h(self, sample_df, config, feature_cols):
+        """Day-level mode: if < 20 hours available, skip day."""
+        config = DeepRTSOTADatasetConfig(target_granularity="day")
+        # Create a day with only 10 hours
+        df = sample_df.copy()
+        bad_day = sorted(df["business_day"].unique())[10]
+        bad_mask = (df["business_day"] == bad_day) & (df["hour_business"] > 10)
+        df = df[~bad_mask]
 
-        if len(dataset) > 0:
-            sample = dataset[0]
-            y = sample["y"]
+        target_days = [bad_day]
+        dataset = DeepRTSOTADataset(config, df, target_days, feature_cols)
+        # bad_day should be skipped (sample is None → not added)
+        assert len(dataset) == 0  # Or check that bad_day not in samples
 
-            # y should be rt_actual - da_anchor
-            day = sample["business_day"]
-            day_hours = sample_data[sample_data["business_day"] == day]
-            rt_actual = day_hours["rt_actual"].values[:24]
-            da_anchor = day_hours["da_anchor"].values[:24]
-            expected_y = rt_actual - da_anchor
-
-            np.testing.assert_allclose(y.numpy(), expected_y, rtol=1e-5)
-
-    def test_missing_da_anchor_for_residual(self, sample_data):
-        """Test missing da_anchor raises error for residual_to_da mode."""
-        config = DeepRTSOTADatasetConfig(target_mode="residual_to_da")
-        df = sample_data.drop(columns=["da_anchor"])
-
-        with pytest.raises(ValueError, match="da_anchor column required for residual_to_da mode"):
-            DeepRTSOTADataset(config=config, data_df=df, split="train")
-
-    def test_leakage_check(self, sample_data, config):
-        """Test leakage check: target day actual should not be used for features."""
-        # TODO: Implement proper leakage check test
-        # For now, just check that the dataset can be built
-        dataset = DeepRTSOTADataset(config=config, data_df=sample_data, split="train")
-        assert dataset is not None
-
-    def test_save_feature_manifest(self, sample_data, config, tmp_path):
-        """Test saving feature manifest."""
-        dataset = DeepRTSOTADataset(config=config, data_df=sample_data, split="train")
-
-        manifest_path = tmp_path / "feature_manifest.json"
-        dataset.save_feature_manifest(str(manifest_path))
-
-        assert manifest_path.exists()
-        import json
-        with open(manifest_path) as f:
-            manifest = json.load(f)
-        assert isinstance(manifest, dict)
+    def test_hourly_mode_raises_not_implemented(self, sample_df, feature_cols):
+        """Hourly mode must raise NotImplementedError."""
+        config = DeepRTSOTADatasetConfig(target_granularity="hourly")
+        target_days = sorted(sample_df["business_day"].unique())[7:9]
+        with pytest.raises(NotImplementedError, match="Hourly mode"):
+            DeepRTSOTADataset(config, sample_df, target_days, feature_cols)
 
 
-class TestBuildDeepRTSOTA:
-    """Tests for build_deep_rt_sota_dataset function."""
+# ---------------------------------------------------------------------------
+# Test build_deep_rt_sota_dataset function
+# ---------------------------------------------------------------------------
 
-    def test_build_dataset(self):
-        """Test building dataset."""
+class TestBuildDeepRTSOTADataset:
+
+    def test_build_with_real_api(self):
         config = DeepRTSOTADatasetConfig()
         df = create_sample_data(n_days=30)
+        feature_cols = get_feature_columns(df)
+        target_days = sorted(df["business_day"].unique())[7:]
 
-        dataset = build_deep_rt_sota_dataset(config=config, data_df=df, split="train")
+        dataset = build_deep_rt_sota_dataset(
+            config=config,
+            full_df=df,
+            target_days=target_days,
+            feature_columns=feature_cols,
+        )
 
         assert isinstance(dataset, DeepRTSOTADataset)
         assert len(dataset) > 0

@@ -60,6 +60,10 @@ class DeepRTSOTADatasetConfig:
             raise ValueError(f"Only FULL_DAY mode is currently supported, got {self.mode}")
         if self.target_granularity not in ("day", "hourly"):
             raise ValueError(f"target_granularity must be 'day' or 'hourly', got {self.target_granularity}")
+        if self.target_granularity == "hourly":
+            raise NotImplementedError(
+                "Hourly mode is not production-ready. Use target_granularity='day'."
+            )
 
 
 class DeepRTSOTADataset:
@@ -202,7 +206,10 @@ class DeepRTSOTADataset:
 
         # Build y: (24,)
         y = day_rows["rt_actual"].values.astype(np.float32)
-        y = np.nan_to_num(y, nan=0.0)  # Fill NaN target with 0
+        # Do NOT fill NaN target with 0 — that's a data leakage risk.
+        # Instead, if any NaN in target, skip this day.
+        if np.any(np.isnan(y)):
+            return None  # Skip days with NaN target
 
         if self.config.target_mode == "residual_to_da":
             if "da_anchor" not in day_rows.columns:

@@ -34,8 +34,8 @@ PRICE_HISTORY_FEATURES = [
     "rt_lag_168h",
     "previous_day_rt_mean",
     "previous_day_rt_std",
-    "previous_7d_same_hour_mean",
-    "previous_7d_same_hour_std",
+    "previous_7d_rolling_hourly_mean",   # WAS: previous_7d_same_hour_mean (NOT same-hour; see note)
+    "previous_7d_rolling_hourly_std",    # WAS: previous_7d_same_hour_std  (NOT same-hour; see note)
 ]
 
 ANCHOR_FORECAST_FEATURES = [

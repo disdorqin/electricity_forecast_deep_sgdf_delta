@@ -1,0 +1,23 @@
+[
+  "da_price",
+  "hour",
+  "is_weekend",
+  "month",
+  "da_price_level_code",
+  "abs_residual_bucket_code",
+  "period_code",
+  "da_lag_24h",
+  "da_lag_48h",
+  "da_lag_72h",
+  "da_lag_168h",
+  "rt_lag_24h",
+  "rt_lag_48h",
+  "rt_lag_72h",
+  "rt_lag_168h",
+  "da_roll_mean_24h",
+  "da_roll_mean_48h",
+  "da_roll_mean_168h",
+  "rt_roll_mean_24h",
+  "rt_roll_mean_48h",
+  "rt_roll_mean_168h"
+]
