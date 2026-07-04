@@ -31,6 +31,7 @@ class BasePredictionLoadResult:
     source: str  # "DA_ANCHOR_BASELINE", "BASE_PREDICTION_FILE", etc.
     model_name: str  # "da_anchor", "sgdfnet", "fusion", etc.
     production_candidate: bool
+    evaluation_allowed: bool = True  # False if oracle baseline detected
     warnings: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
 
@@ -41,8 +42,14 @@ def load_da_anchor_baseline(
 ) -> BasePredictionLoadResult:
     """Load DA anchor baseline from Shandong PMOS data.
 
-    DA anchor = day-ahead clearing price (usually the 'price' column).
-    This is a fallback option, NOT a production baseline.
+    ⚠️ IMPORTANT: This function is for SENSITIVITY TESTING ONLY.
+    DA anchor = day-ahead clearing price (日前电价).
+    If only real-time price (实时电价) is available, this is an ORACLE BASELINE
+    and evaluation_allowed will be set to False.
+
+    Oracle baseline detection:
+    - If base_pred == y_true (within tolerance), evaluation_allowed = False
+    - Price metrics will be marked as INVALID_ORACLE_BASELINE
 
     Args:
         data_path: Path to Shandong PMOS hourly CSV.
@@ -70,14 +77,30 @@ def load_da_anchor_baseline(
     # Clean column names (remove whitespace, invisible chars)
     df.columns = df.columns.str.strip()
     
-    # Find price column (try common names, including Chinese)
-    price_col = None
-    for col in ["price", "Price", "clearing_price", "da_price", "日前电价"]:
+    # Try to find SEPARATE DA price and RT price columns
+    da_price_col = None
+    rt_price_col = None
+    
+    # DA price candidates (日前电价)
+    for col in ["da_price", "day_ahead_price", "日前电价", "clearing_price_da"]:
         if col in df.columns:
-            price_col = col
+            da_price_col = col
             break
     
-    if price_col is None:
+    # RT price candidates (实时电价)
+    for col in ["price", "rt_price", "real_time_price", "实时电价", "clearing_price"]:
+        if col in df.columns:
+            rt_price_col = col
+            break
+    
+    # If no separate columns found, try to find a single price column
+    if da_price_col is None and rt_price_col is None:
+        for col in ["price", "Price", "clearing_price", "日前电价", "实时电价"]:
+            if col in df.columns:
+                rt_price_col = col
+                break
+    
+    if rt_price_col is None:
         raise ValueError(
             f"Cannot find price column in {data_path}. "
             f"Available columns: {list(df.columns)}"
@@ -96,12 +119,47 @@ def load_da_anchor_baseline(
             f"Available columns: {list(df.columns)}"
         )
     
-    # Rename for consistency
-    df = df.rename(columns={ts_col: "ds", price_col: "base_pred"})
-    df["ds"] = pd.to_datetime(df["ds"])
+    # Initialize warnings and metadata
+    warnings = []
+    metadata = {
+        "n_samples": 0,
+        "target_months": target_months,
+        "da_price_column_found": da_price_col,
+        "rt_price_column_found": rt_price_col,
+        "oracle_baseline_detected": False,
+    }
     
-    # Keep actual price as y_true for evaluation
-    df["y_true"] = df["base_pred"].copy()
+    # Case 1: Both DA and RT price columns found (ideal)
+    if da_price_col is not None and rt_price_col is not None:
+        df = df.rename(columns={ts_col: "ds", da_price_col: "base_pred"})
+        df["y_true"] = df[rt_price_col].values
+        metadata["base_pred_source"] = da_price_col
+        metadata["y_true_source"] = rt_price_col
+        evaluation_allowed = True
+    
+    # Case 2: Only RT price column found (ORACLE BASELINE)
+    else:
+        warnings.append(
+            "ORACLE BASELINE DETECTED: Only one price column found. "
+            "base_pred == y_true, so price metrics evaluation is INVALID. "
+            "This is for sensitivity testing ONLY, not production evaluation."
+        )
+        warnings.append(
+            "Set evaluation_allowed=False. Price improvement metrics will be "
+            "marked as INVALID_ORACLE_BASELINE."
+        )
+        
+        df = df.rename(columns={ts_col: "ds", rt_price_col: "base_pred"})
+        # DO NOT set y_true = base_pred (would create oracle baseline)
+        # Instead, set y_true to NaN to indicate missing actuals
+        df["y_true"] = np.nan
+        
+        metadata["base_pred_source"] = rt_price_col
+        metadata["y_true_source"] = None
+        metadata["oracle_baseline_detected"] = True
+        evaluation_allowed = False
+    
+    df["ds"] = pd.to_datetime(df["ds"])
     
     # Add business time columns
     df = add_business_time_columns(df, timestamp_col="ds")
@@ -139,23 +197,38 @@ def load_da_anchor_baseline(
             f"business_day + hour_business + target_month must be unique."
         )
     
-    warnings = [
+    # Oracle baseline detection: check if base_pred == y_true (for non-NaN rows)
+    if not df["y_true"].isna().all():
+        valid_mask = df["y_true"].notna()
+        if valid_mask.sum() > 0:
+            base_pred_valid = df.loc[valid_mask, "base_pred"].values
+            y_true_valid = df.loc[valid_mask, "y_true"].values
+            if np.allclose(base_pred_valid, y_true_valid, equal_nan=True):
+                metadata["oracle_baseline_detected"] = True
+                evaluation_allowed = False
+                warnings.append(
+                    "ORACLE BASELINE CONFIRMED: base_pred == y_true for all valid rows. "
+                    "evaluation_allowed set to False."
+                )
+    
+    # Add standard warnings (always present for DA anchor)
+    warnings.extend([
         "This is a DA anchor baseline (fallback), NOT a production baseline.",
         "Marked as production_candidate=false.",
         "Use only for guardrail sensitivity testing, not for production evaluation.",
-    ]
+    ])
+    
+    metadata["n_samples"] = len(result_df)
+    metadata["evaluation_allowed"] = evaluation_allowed
     
     return BasePredictionLoadResult(
         df=result_df,
         source="DA_ANCHOR_BASELINE",
         model_name="da_anchor",
         production_candidate=False,
+        evaluation_allowed=evaluation_allowed,
         warnings=warnings,
-        metadata={
-            "n_samples": len(result_df),
-            "target_months": target_months,
-            "price_column_used": price_col,
-        },
+        metadata=metadata,
     )
 
 
@@ -275,15 +348,36 @@ def load_base_prediction_file(
     # Determine production_candidate
     production_candidate = base_source != "DA_ANCHOR_BASELINE"
     
+    # Oracle baseline detection: check if base_pred == y_true
+    evaluation_allowed = True
+    oracle_baseline_detected = False
+    
+    if "y_true" in df.columns and "base_pred" in df.columns:
+        # Check for non-NaN rows
+        valid_mask = df["y_true"].notna()
+        if valid_mask.sum() > 0:
+            base_pred_valid = df.loc[valid_mask, "base_pred"].values
+            y_true_valid = df.loc[valid_mask, "y_true"].values
+            if np.allclose(base_pred_valid, y_true_valid, equal_nan=True):
+                oracle_baseline_detected = True
+                evaluation_allowed = False
+    
+    # If source is DA_ANCHOR_BASELINE, always set evaluation_allowed based on metadata
+    if base_source == "DA_ANCHOR_BASELINE":
+        evaluation_allowed = False  # DA anchor from single price column is always oracle
+    
     return BasePredictionLoadResult(
         df=result_df,
         source=base_source,
         model_name=base_model_name,
         production_candidate=production_candidate,
+        evaluation_allowed=evaluation_allowed,
         warnings=[],
         metadata={
             "n_samples": len(result_df),
             "file_path": str(file_path),
+            "oracle_baseline_detected": oracle_baseline_detected,
+            "evaluation_allowed": evaluation_allowed,
         },
     )
 
@@ -411,5 +505,18 @@ class BasePredictionAdapter:
             nan_count = result.df["base_pred"].isna().sum()
             if nan_count > 0:
                 errors.append(f"NaN in base_pred: {nan_count} rows")
+        
+        # Oracle baseline detection: check if base_pred == y_true
+        if "base_pred" in result.df.columns and "y_true" in result.df.columns:
+            valid_mask = result.df["y_true"].notna()
+            if valid_mask.sum() > 0:
+                base_pred_valid = result.df.loc[valid_mask, "base_pred"].values
+                y_true_valid = result.df.loc[valid_mask, "y_true"].values
+                if np.allclose(base_pred_valid, y_true_valid, equal_nan=True):
+                    # This is a warning, not a blocking error
+                    errors.append(
+                        "WARNING: ORACLE BASELINE DETECTED - base_pred == y_true for all valid rows. "
+                        "Price metrics evaluation is INVALID. Set evaluation_allowed=False."
+                    )
         
         return errors

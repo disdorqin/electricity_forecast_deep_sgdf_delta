@@ -80,6 +80,10 @@ class ShadowReplayResult:
     champion_policy: Dict[str, Any]
     decision_log: pd.DataFrame
     metrics: Dict[str, float]
+    bucket_metrics: pd.DataFrame = None
+    period_metrics: pd.DataFrame = None
+    monthly_metrics: pd.DataFrame = None
+    risk_trigger_metrics: pd.DataFrame = None
     warnings: List[str] = field(default_factory=list)
 
 
@@ -495,6 +499,141 @@ def _policy_dict_to_config(policy_dict: Dict[str, Any]) -> GuardrailPolicyConfig
     )
 
 
+def _calculate_bucket_metrics(eval_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate metrics for each bucket.
+    
+    Buckets:
+    - negative: y_true < 0
+    - spike: y_true >= 500
+    - normal: otherwise
+    - large_abs_delta: abs(y_true - base_pred) >= 150
+    
+    Args:
+        eval_df: DataFrame with evaluation results (base_pred, y_true, risk_adjusted_pred, guardrail_triggered).
+    
+    Returns:
+        DataFrame with bucket metrics.
+    """
+    # Define buckets
+    buckets = {
+        "negative": eval_df["y_true"] < 0,
+        "spike": eval_df["y_true"] >= 500,
+        "normal": (~(eval_df["y_true"] < 0)) & (~(eval_df["y_true"] >= 500)),
+        "large_abs_delta": abs(eval_df["y_true"] - eval_df["base_pred"]) >= 150,
+    }
+    
+    results = []
+    
+    for bucket_name, bucket_mask in buckets.items():
+        if bucket_mask.sum() == 0:
+            continue
+        
+        bucket_df = eval_df[bucket_mask]
+        
+        # Calculate metrics
+        metrics = _evaluate_guardrail(bucket_df)
+        metrics["bucket"] = bucket_name
+        metrics["n_rows"] = len(bucket_df)
+        
+        results.append(metrics)
+    
+    return pd.DataFrame(results)
+
+
+def _calculate_period_metrics(eval_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate metrics for each period.
+    
+    Periods:
+    - 1_8: hour_business in [1, 8]
+    - 9_16: hour_business in [9, 16]
+    - 17_24: hour_business in [17, 24]
+    
+    Args:
+        eval_df: DataFrame with evaluation results.
+    
+    Returns:
+        DataFrame with period metrics.
+    """
+    # Define periods
+    periods = {
+        "1_8": (eval_df["hour_business"] >= 1) & (eval_df["hour_business"] <= 8),
+        "9_16": (eval_df["hour_business"] >= 9) & (eval_df["hour_business"] <= 16),
+        "17_24": (eval_df["hour_business"] >= 17) & (eval_df["hour_business"] <= 24),
+    }
+    
+    results = []
+    
+    for period_name, period_mask in periods.items():
+        if period_mask.sum() == 0:
+            continue
+        
+        period_df = eval_df[period_mask]
+        
+        # Calculate metrics
+        metrics = _evaluate_guardrail(period_df)
+        metrics["period"] = period_name
+        metrics["n_rows"] = len(period_df)
+        
+        results.append(metrics)
+    
+    return pd.DataFrame(results)
+
+
+def _calculate_monthly_metrics(eval_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate metrics for each month.
+    
+    Args:
+        eval_df: DataFrame with evaluation results.
+    
+    Returns:
+        DataFrame with monthly metrics.
+    """
+    results = []
+    
+    for month in eval_df["target_month"].unique():
+        month_mask = eval_df["target_month"] == month
+        month_df = eval_df[month_mask]
+        
+        # Calculate metrics
+        metrics = _evaluate_guardrail(month_df)
+        metrics["target_month"] = month
+        metrics["n_rows"] = len(month_df)
+        
+        results.append(metrics)
+    
+    return pd.DataFrame(results)
+
+
+def _calculate_risk_trigger_metrics(eval_df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate metrics for risk trigger analysis.
+    
+    Args:
+        eval_df: DataFrame with evaluation results.
+    
+    Returns:
+        DataFrame with risk trigger metrics.
+    """
+    results = []
+    
+    # Negative trigger metrics
+    neg_triggered = eval_df[eval_df["negative_alert"] == 1]
+    if len(neg_triggered) > 0:
+        metrics = _evaluate_guardrail(neg_triggered)
+        metrics["trigger_type"] = "negative"
+        metrics["n_triggers"] = len(neg_triggered)
+        results.append(metrics)
+    
+    # Spike trigger metrics
+    spike_triggered = eval_df[eval_df["spike_alert"] == 1]
+    if len(spike_triggered) > 0:
+        metrics = _evaluate_guardrail(spike_triggered)
+        metrics["trigger_type"] = "spike"
+        metrics["n_triggers"] = len(spike_triggered)
+        results.append(metrics)
+    
+    return pd.DataFrame(results)
+
+
 class RiskShadowReplay:
     """Shadow replay engine for risk-aware guardrail.
 
@@ -528,7 +667,7 @@ class RiskShadowReplay:
         out_dir: Optional[str | Path] = None,
     ):
         """Export shadow replay results.
-
+        
         Args:
             result: ShadowReplayResult. If None, uses last_result.
             out_dir: Output directory. If None, uses config.out_dir.
@@ -558,6 +697,37 @@ class RiskShadowReplay:
         # Export metrics
         metrics_df = pd.DataFrame([result.metrics])
         metrics_df.to_csv(out_dir / "shadow_metrics.csv", index=False)
+        
+        # Calculate and export bucket metrics
+        if result.decision_log is not None and len(result.decision_log) > 0:
+            # Check if required columns exist
+            required_cols = ["y_true", "base_pred", "risk_adjusted_pred", "guardrail_triggered"]
+            if all(col in result.decision_log.columns for col in required_cols):
+                # Bucket metrics
+                bucket_metrics = _calculate_bucket_metrics(result.decision_log)
+                if len(bucket_metrics) > 0:
+                    bucket_metrics.to_csv(out_dir / "bucket_metrics.csv", index=False)
+                    result.bucket_metrics = bucket_metrics
+                
+                # Period metrics
+                period_metrics = _calculate_period_metrics(result.decision_log)
+                if len(period_metrics) > 0:
+                    period_metrics.to_csv(out_dir / "period_metrics.csv", index=False)
+                    result.period_metrics = period_metrics
+                
+                # Monthly metrics
+                if "target_month" in result.decision_log.columns:
+                    monthly_metrics = _calculate_monthly_metrics(result.decision_log)
+                    if len(monthly_metrics) > 0:
+                        monthly_metrics.to_csv(out_dir / "monthly_metrics.csv", index=False)
+                        result.monthly_metrics = monthly_metrics
+                
+                # Risk trigger metrics
+                if "negative_alert" in result.decision_log.columns:
+                    risk_trigger_metrics = _calculate_risk_trigger_metrics(result.decision_log)
+                    if len(risk_trigger_metrics) > 0:
+                        risk_trigger_metrics.to_csv(out_dir / "risk_trigger_metrics.csv", index=False)
+                        result.risk_trigger_metrics = risk_trigger_metrics
         
         # Export warnings
         if result.warnings:
