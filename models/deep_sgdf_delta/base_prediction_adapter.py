@@ -67,9 +67,12 @@ def load_da_anchor_baseline(
     if df is None:
         raise RuntimeError(f"Failed to read {data_path} with any encoding")
     
-    # Find price column (try common names)
+    # Clean column names (remove whitespace, invisible chars)
+    df.columns = df.columns.str.strip()
+    
+    # Find price column (try common names, including Chinese)
     price_col = None
-    for col in ["price", "Price", "clearing_price", "da_price"]:
+    for col in ["price", "Price", "clearing_price", "da_price", "日前电价"]:
         if col in df.columns:
             price_col = col
             break
@@ -80,9 +83,9 @@ def load_da_anchor_baseline(
             f"Available columns: {list(df.columns)}"
         )
     
-    # Find timestamp column
+    # Find timestamp column (try common names, including Chinese)
     ts_col = None
-    for col in ["ds", "timestamp", "date", "time"]:
+    for col in ["ds", "timestamp", "date", "time", "时刻"]:
         if col in df.columns:
             ts_col = col
             break

@@ -23,9 +23,15 @@ Usage:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Add project root to path
+_project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(_project_root))
+
 import pandas as pd
 import numpy as np
-from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 import json
@@ -164,9 +170,12 @@ def _load_actual_prices(
     if df is None:
         raise RuntimeError(f"Failed to read {data_path} with any encoding")
     
-    # Find price column
+    # Clean column names (remove whitespace, invisible chars)
+    df.columns = df.columns.str.strip()
+    
+    # Find price column (try common names, including Chinese)
     price_col = None
-    for col in ["price", "Price", "clearing_price", "actual"]:
+    for col in ["price", "Price", "clearing_price", "actual", "实时电价"]:
         if col in df.columns:
             price_col = col
             break
@@ -174,9 +183,9 @@ def _load_actual_prices(
     if price_col is None:
         raise ValueError(f"Cannot find price column in {data_path}")
     
-    # Find timestamp column
+    # Find timestamp column (try common names, including Chinese)
     ts_col = None
-    for col in ["ds", "timestamp", "date"]:
+    for col in ["ds", "timestamp", "date", "时刻"]:
         if col in df.columns:
             ts_col = col
             break
