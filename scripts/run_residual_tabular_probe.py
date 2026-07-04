@@ -65,6 +65,12 @@ def prepare_data(df: pd.DataFrame, target_month: str):
     df = df.copy()
     df['ds'] = pd.to_datetime(df['时刻'])
     
+    # Rename columns to English
+    df = df.rename(columns={
+        '日前电价': 'da_anchor',
+        '实时电价': 'rt_actual',
+    })
+    
     # Add calendar features
     df['hour'] = df['ds'].dt.hour
     df['dow'] = df['ds'].dt.dayofweek
@@ -74,7 +80,7 @@ def prepare_data(df: pd.DataFrame, target_month: str):
     df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
     
     # Compute residual
-    df['residual'] = df['实时电价'] - df['日前电价']
+    df['residual'] = df['rt_actual'] - df['da_anchor']
     
     # Parse target month
     target_start = pd.to_datetime(target_month + '-01')
@@ -142,7 +148,7 @@ def run_tabular_probe(data_path: str, target_month: str, out_dir: Path):
     # Drop NaN
     train_valid = train_df.dropna(subset=available_features + ['residual']).copy()
     val_valid = val_df.dropna(subset=available_features + ['residual']).copy()
-    test_valid = test_df.dropna(subset=available_features + ['residual', '日前电价', '实时电价']).copy()
+    test_valid = test_df.dropna(subset=available_features + ['residual', 'da_anchor', 'rt_actual']).copy()
     
     if len(train_valid) < 100 or len(test_valid) < 10:
         print(f"\n  ERROR: Not enough valid samples")
@@ -154,18 +160,39 @@ def run_tabular_probe(data_path: str, target_month: str, out_dir: Path):
     
     X_val = val_valid[available_features].fillna(0).values
     y_val = val_valid['residual'].values
-    da_val = val_valid['日前电价'].values
-    rt_val = val_valid['实时电价'].values
+    da_val = val_valid['da_anchor'].values
+    rt_val = val_valid['rt_actual'].values
     
     X_test = test_valid[available_features].fillna(0).values
-    da_test = test_valid['日前电价'].values
-    rt_test = test_valid['实时电价'].values
+    da_test = test_valid['da_anchor'].values
+    rt_test = test_valid['rt_actual'].values
     
-    # DA anchor baselines
-    da_smape_test = smape_floor50(rt_test, da_test)
-    da_smape_val = smape_floor50(rt_val, da_val)
+    # ── Convert to day-level for evaluation ──────────────────────────────
+    def to_day_level(df):
+        """Convert hourly data to day-level (24h average per day)."""
+        df = df.copy()
+        df['date'] = pd.to_datetime(df['ds']).dt.date
+        day_df = df.groupby('date').agg({
+            'rt_actual': 'mean',
+            'da_anchor': 'mean',
+            'residual': 'mean',
+        }).reset_index()
+        return day_df
     
-    print(f"\nDA anchor baselines:")
+    test_day = to_day_level(test_valid)
+    rt_test_day = test_day['rt_actual'].values
+    da_test_day = test_day['da_anchor'].values
+    
+    # DA anchor baseline (day-level)
+    da_smape_test = smape_floor50(rt_test_day, da_test_day)
+    
+    # Val day-level
+    val_day = to_day_level(val_valid)
+    rt_val_day = val_day['rt_actual'].values
+    da_val_day = val_day['da_anchor'].values
+    da_smape_val = smape_floor50(rt_val_day, da_val_day)
+    
+    print(f"\nDA anchor baselines (day-level):")
     print(f"  Val sMAPE:   {da_smape_val:.2f}")
     print(f"  Test sMAPE:  {da_smape_test:.2f}")
     
@@ -180,30 +207,66 @@ def run_tabular_probe(data_path: str, target_month: str, out_dir: Path):
     def evaluate_model(name, model):
         try:
             model.fit(X_train, y_train)
-            y_val_pred = model.predict(X_val)
             
-            # Select alpha/clip on val
-            best_alpha, best_clip, best_val_smape = select_shrink_gate(
-                y_val_pred, da_val, rt_val, alpha_candidates, clip_candidates
-            )
+            # ── Validation ──────────────────────────────────────────────
+            y_val_pred_hourly = model.predict(X_val)
             
-            # Apply to test
-            y_test_pred = model.predict(X_test)
-            residual_clipped = np.clip(y_test_pred, -best_clip, best_clip)
-            final_test_pred = da_test + best_alpha * residual_clipped
-            test_smape = smape_floor50(rt_test, final_test_pred)
+            # Select alpha/clip on VALIDATION set (day-level sMAPE)
+            best_alpha = 0.0
+            best_clip = 0.0
+            best_val_smape = float('inf')
+            
+            for alpha in alpha_candidates:
+                for clip in clip_candidates:
+                    residual_clipped = np.clip(y_val_pred_hourly, -clip, clip)
+                    final_pred_hourly = da_val + alpha * residual_clipped
+                    
+                    # Aggregate to day-level
+                    val_results = pd.DataFrame({
+                        'date': val_valid['ds'].dt.date,
+                        'rt_actual': rt_val,
+                        'final_pred': final_pred_hourly,
+                    })
+                    val_day = val_results.groupby('date').agg({
+                        'rt_actual': 'mean',
+                        'final_pred': 'mean',
+                    }).values
+                    
+                    smape = smape_floor50(val_day[:, 0], val_day[:, 1])
+                    if smape < best_val_smape:
+                        best_val_smape = smape
+                        best_alpha = alpha
+                        best_clip = clip
+            
+            # ── Test ──────────────────────────────────────────────────
+            y_test_pred_hourly = model.predict(X_test)
+            residual_clipped = np.clip(y_test_pred_hourly, -best_clip, best_clip)
+            final_pred_hourly = da_test + best_alpha * residual_clipped
+            
+            # Aggregate to day-level
+            test_results = pd.DataFrame({
+                'date': test_valid['ds'].dt.date,
+                'rt_actual': rt_test,
+                'final_pred': final_pred_hourly,
+            })
+            test_day = test_results.groupby('date').agg({
+                'rt_actual': 'mean',
+                'final_pred': 'mean',
+            }).values
+            
+            test_smape = smape_floor50(test_day[:, 0], test_day[:, 1])
             
             improvement = da_smape_test - test_smape
             status = 'KEEP' if improvement >= 0.3 else ('WEAK_KEEP' if improvement > 0 else 'KILL')
             
             print(f"\n  {name}:")
-            print(f"    Val sMAPE (shrunk):  {best_val_smape:.2f}")
-            print(f"    Test sMAPE:            {test_smape:.2f}")
-            print(f"    DA sMAPE:             {da_smape_test:.2f}")
-            print(f"    Improvement:           {improvement:+.2f} pp")
-            print(f"    Status:                {status}")
-            print(f"    Alpha:                 {best_alpha}")
-            print(f"    Clip:                  {best_clip}")
+            print(f"    Val sMAPE (day-level):  {best_val_smape:.2f}")
+            print(f"    Test sMAPE (day-level): {test_smape:.2f}")
+            print(f"    DA sMAPE (day-level):   {da_smape_test:.2f}")
+            print(f"    Improvement:              {improvement:+.2f} pp")
+            print(f"    Status:                    {status}")
+            print(f"    Alpha:                     {best_alpha}")
+            print(f"    Clip:                      {best_clip}")
             
             candidates.append({
                 'model': name,
