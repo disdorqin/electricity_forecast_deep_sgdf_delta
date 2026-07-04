@@ -230,15 +230,16 @@ def _evaluate_negative_alerts(
     # Top-k capture
     top_k_capture = {}
     if "y_true" in df.columns:
-        # Convert to Series for proper indexing
-        y_true_series = df["y_true"]
+        # Keep as Series for proper indexing
+        true_negative_series = pd.Series(true_negative, index=df.index)
         
         for k in config.top_k_list:
-            if k > len(df):
-                k = len(df)
+            k = min(k, len(df))
+            if k == 0:
+                continue
             
             top_k_idx = df["negative_prob"].nlargest(k).index
-            top_k_capture[f"top_{k}_capture"] = np.sum(true_negative[top_k_idx]) / max(1, np.sum(true_negative))
+            top_k_capture[f"top_{k}_capture"] = true_negative_series.loc[top_k_idx].sum() / max(1, np.sum(true_negative))
     
     return {
         "precision": precision,
@@ -290,12 +291,16 @@ def _evaluate_spike_alerts(
     # Top-k capture
     top_k_capture = {}
     if "y_true" in df.columns:
+        # Keep as Series for proper indexing
+        true_spike_series = pd.Series(true_spike, index=df.index)
+        
         for k in config.top_k_list:
-            if k > len(df):
-                k = len(df)
+            k = min(k, len(df))
+            if k == 0:
+                continue
             
             top_k_idx = df["spike_prob"].nlargest(k).index
-            top_k_capture[f"top_{k}_capture"] = np.sum(true_spike[top_k_idx]) / max(1, np.sum(true_spike))
+            top_k_capture[f"top_{k}_capture"] = true_spike_series.loc[top_k_idx].sum() / max(1, np.sum(true_spike))
     
     return {
         "precision": precision,

@@ -45,20 +45,17 @@ def _create_test_data_for_trigger_eval(
     risk_df["deviation_down_prob"] = np.random.uniform(0, 1, n_hours)
     risk_df["deviation_up_prob"] = np.random.uniform(0, 1, n_hours)
     
-    # Add y_true (actual prices)
-    # Some low prices (negative events)
-    y_true = np.random.uniform(200, 800, n_hours)
-    y_true[:10] = np.random.uniform(50, 150, 10)  # Low prices
-    y_true[10:20] = np.random.uniform(1000, 1500, 10)  # High prices (spikes)
-    risk_df["y_true"] = y_true
-    
-    # Save risk pack
+    # Save risk pack (without y_true - online mode)
     risk_pack_file = out_dir / "test_risk_pack.csv"
     risk_df.to_csv(risk_pack_file, index=False)
     
-    # Create data file (with price column)
-    data_df = risk_df[["ds", "y_true"]].copy()
-    data_df = data_df.rename(columns={"y_true": "price"})
+    # Create data file (with price column for eval)
+    data_df = pd.DataFrame({
+        "ds": timestamps,
+        "price": np.random.uniform(200, 800, n_hours),
+    })
+    data_df.loc[:9, "price"] = np.random.uniform(50, 150, 10)  # Low prices
+    data_df.loc[10:19, "price"] = np.random.uniform(1000, 1500, 10)  # High prices (spikes)
     data_df["ds"] = pd.to_datetime(data_df["ds"])
     
     # Save data file
