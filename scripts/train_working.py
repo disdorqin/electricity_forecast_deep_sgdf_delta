@@ -56,6 +56,8 @@ def parse_args():
                         help="Comma-separated alpha candidates")
     parser.add_argument("--clip-candidates", type=str, default="50,100,150,200,300",
                         help="Comma-separated clip candidates")
+    parser.add_argument("--use-residual-history-features", action="store_true",
+                        help="Use residual history features (residual_lag_*, etc.)")
     return parser.parse_args()
 
 
@@ -235,12 +237,14 @@ def train_and_evaluate(args):
         merged_df,
         risk_features=args.risk_features,
         forecast_features=False,
+        use_residual_history_features=args.use_residual_history_features,
     )
     
     # Get feature columns (after feature building)
     feature_columns = get_feature_columns(
         risk_features=args.risk_features,
         forecast_features=False,
+        use_residual_history_features=args.use_residual_history_features,
     )
     feature_columns = [c for c in feature_columns if c in merged_df.columns]
     print(f"  Feature columns: {len(feature_columns)}")

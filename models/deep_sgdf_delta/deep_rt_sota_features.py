@@ -80,6 +80,18 @@ FORECAST_SIDE_FEATURES = [
     "forecast_bidding_pressure",
 ]
 
+RESIDUAL_HISTORY_FEATURES = [
+    "residual_lag_24h",
+    "residual_lag_48h",
+    "residual_lag_72h",
+    "residual_lag_168h",
+    "residual_prev_day_mean",
+    "residual_prev_day_std",
+    "residual_prev_7d_same_hour_mean",
+    "residual_prev_14d_same_hour_mean",
+    "residual_prev_7d_period_mean",
+]
+
 
 def build_deep_rt_sota_features(
     df: pd.DataFrame,
@@ -89,6 +101,7 @@ def build_deep_rt_sota_features(
     da_anchor_col: str = "da_anchor",
     risk_features: str = "off",  # "off" | "real" | "synthetic"
     forecast_features: bool = False,
+    use_residual_history_features: bool = False,
     risk_df: Optional[pd.DataFrame] = None,
     base_pred_df: Optional[pd.DataFrame] = None,
 ) -> Tuple[pd.DataFrame, Dict]:
@@ -153,7 +166,19 @@ def build_deep_rt_sota_features(
         logger.info("Risk features disabled (off), skipping...")
         feature_manifest["risk_features_source"] = "off"
 
-    # ── 5. Forecast-side features (optional) ──────────────────────────
+    # ── 5. Residual history features (optional, for residual_to_da mode) ──
+    if use_residual_history_features:
+        logger.info("Building residual history features...")
+        df, rh_manifest = _build_residual_history_features(
+            df, rt_actual_col=rt_actual_col, da_anchor_col=da_anchor_col
+        )
+        feature_manifest["residual_history_features"] = rh_manifest
+        feature_manifest["residual_history_features_enabled"] = True
+    else:
+        logger.info("Residual history features disabled, skipping...")
+        feature_manifest["residual_history_features_enabled"] = False
+
+    # ── 6. Forecast-side features (optional) ──────────────────────────
     if forecast_features:
         logger.info("Building forecast-side features...")
         df, fs_manifest = _build_forecast_side_features(df)
@@ -385,15 +410,99 @@ def _build_forecast_side_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[
     return df, built_features
 
 
+def _build_residual_history_features(
+    df: pd.DataFrame,
+    rt_actual_col: str = "rt_actual",
+    da_anchor_col: str = "da_anchor",
+) -> Tuple[pd.DataFrame, List[str]]:
+    """Build residual history features (strictly no target-day leakage).
+
+    Residual = rt_actual - da_anchor.
+    All lag features use ONLY data from D-1 and earlier.
+
+    Args:
+        df: Input DataFrame (must be sorted by ds, have business_time columns).
+        rt_actual_col: Name of realtime actual column.
+        da_anchor_col: Name of day-ahead anchor column.
+
+    Returns:
+        Tuple of (df with features, list of built feature names).
+    """
+    built_features = []
+    df = df.sort_values("ds").reset_index(drop=True)
+
+    # Compute residual (rt_actual - da_anchor)
+    residual = df[rt_actual_col] - df[da_anchor_col]
+
+    # residual_lag_24h: residual at same hour on previous day (D-1)
+    df["residual_lag_24h"] = residual.shift(24)
+    built_features.append("residual_lag_24h")
+
+    # residual_lag_48h: residual at same hour two days ago (D-2)
+    df["residual_lag_48h"] = residual.shift(48)
+    built_features.append("residual_lag_48h")
+
+    # residual_lag_72h: residual at same hour three days ago (D-3)
+    df["residual_lag_72h"] = residual.shift(72)
+    built_features.append("residual_lag_72h")
+
+    # residual_lag_168h: residual at same hour one week ago (D-7)
+    df["residual_lag_168h"] = residual.shift(168)
+    built_features.append("residual_lag_168h")
+
+    # residual_prev_day_mean: mean of residual for previous day (D-1, all 24h)
+    df["residual_prev_day_mean"] = (
+        residual.shift(1).rolling(window=24, min_periods=24).mean()
+    )
+    built_features.append("residual_prev_day_mean")
+
+    # residual_prev_day_std
+    df["residual_prev_day_std"] = (
+        residual.shift(1).rolling(window=24, min_periods=24).std()
+    )
+    built_features.append("residual_prev_day_std")
+
+    # residual_prev_7d_same_hour_mean: mean of residual at same hour for previous 7 days
+    df["residual_prev_7d_same_hour_mean"] = (
+        residual.shift(24).rolling(window=7 * 24, min_periods=7 * 24).mean()
+    )
+    built_features.append("residual_prev_7d_same_hour_mean")
+
+    # residual_prev_14d_same_hour_mean
+    df["residual_prev_14d_same_hour_mean"] = (
+        residual.shift(24).rolling(window=14 * 24, min_periods=14 * 24).mean()
+    )
+    built_features.append("residual_prev_14d_same_hour_mean")
+
+    # residual_prev_7d_period_mean: mean of residual for same period (peak/mid/off)
+    # peak=hours 9-11,17-20; mid=hours 7-8,12-16; off=hours 0-6,21-24
+    period_dummy = df["hour_business"].apply(
+        lambda h: "peak" if h in [9, 10, 11, 17, 18, 19, 20] else ("mid" if h in [7, 8, 12, 13, 14, 15, 16] else "off")
+    )
+    for period_name in ["peak", "mid", "off"]:
+        col_name = f"residual_prev_7d_{period_name}_mean"
+        # Compute rolling mean for each period separately
+        mask = period_dummy == period_name
+        period_residual = residual.where(mask)
+        # Shift by 1 to avoid using current hour, then roll
+        rolled = period_residual.shift(1).rolling(window=7 * 24, min_periods=1).mean()
+        df[col_name] = rolled
+        built_features.append(col_name)
+
+    return df, built_features
+
+
 def get_feature_columns(
     risk_features: str = "off",  # "off" | "real" | "synthetic"
     forecast_features: bool = False,
+    use_residual_history_features: bool = False,
 ) -> List[str]:
     """Get list of feature columns based on configuration.
 
     Args:
         risk_features: "off" | "real" | "synthetic".
         forecast_features: Whether forecast-side features are included.
+        use_residual_history_features: Whether residual history features are included.
 
     Returns:
         List of feature column names.
@@ -405,6 +514,9 @@ def get_feature_columns(
 
     if risk_features in ("real", "synthetic"):
         features.extend(RISK_FEATURES)
+
+    if use_residual_history_features:
+        features.extend(RESIDUAL_HISTORY_FEATURES)
 
     if forecast_features:
         features.extend(FORECAST_SIDE_FEATURES)
