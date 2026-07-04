@@ -48,6 +48,8 @@ class SpikeRiskPredictionResult:
     """Prediction output from SpikeRiskModel."""
     df: pd.DataFrame
     feature_importance: Optional[pd.DataFrame] = None
+    status: str = "OK"
+    reason: str = ""
 
     # Output columns:
     # spike_prob, extreme_spike_prob, relative_spike_prob,
@@ -101,9 +103,33 @@ class SpikeRiskModel:
         y_rel = y_relative_spike[valid_mask]
 
         if len(X_valid) < 10:
-            raise ValueError(
-                f"Not enough valid samples to fit: {len(X_valid)}. Need >= 10."
+            logger.warning(
+                "Insufficient samples to fit SpikeRiskModel: %d. Need >= 10. "
+                "Model will be marked as insufficient and predict NaN.",
+                len(X_valid),
             )
+            self.is_fitted_ = True
+            self._insufficient_events_ = True
+            self._skip_reason_ = f"INSUFFICIENT_EVENTS: only {len(X_valid)} valid samples"
+            return self
+
+        # Check for single-class targets
+        single_class_targets = []
+        for name, y in [("spike", y_sp), ("extreme_spike", y_ext), ("relative_spike", y_rel)]:
+            unique_classes = np.unique(y)
+            if len(unique_classes) < 2:
+                single_class_targets.append(f"{name}={unique_classes}")
+        
+        if single_class_targets:
+            logger.warning(
+                "Single-class target detected: %s. "
+                "Model will be marked as insufficient and predict NaN.",
+                ", ".join(single_class_targets),
+            )
+            self.is_fitted_ = True
+            self._insufficient_events_ = True
+            self._skip_reason_ = f"SINGLE_CLASS_TARGET: {', '.join(single_class_targets)}"
+            return self
 
         logger.info("Fitting SpikeRiskModel on %d samples, %d features",
                      len(X_valid), X_valid.shape[1])
@@ -165,6 +191,25 @@ class SpikeRiskModel:
         """
         if not self.is_fitted_:
             raise RuntimeError("Model not fitted. Call fit() first.")
+
+        # Handle insufficient events case
+        if hasattr(self, '_insufficient_events_') and self._insufficient_events_:
+            logger.warning(
+                "Predicting with insufficient events model. Returning NaN values. "
+                "Reason: %s",
+                getattr(self, '_skip_reason_', 'UNKNOWN'),
+            )
+            result_df = X.copy()
+            result_df["spike_prob"] = np.nan
+            result_df["extreme_spike_prob"] = np.nan
+            result_df["relative_spike_prob"] = np.nan
+            result_df["spike_risk_score"] = np.nan
+            result_df["confidence"] = 0.0
+            return SpikeRiskPredictionResult(
+                df=result_df,
+                status="INSUFFICIENT_EVENTS",
+                reason=getattr(self, '_skip_reason_', 'INSUFFICIENT_EVENTS'),
+            )
 
         result_df = X.copy()
 

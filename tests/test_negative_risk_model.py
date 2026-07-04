@@ -91,15 +91,25 @@ class TestFeatureImportance:
 
 
 class TestInsufficientData:
-    def test_too_few_samples_raises(self):
+    def test_too_few_samples_handled_gracefully(self):
+        """When sample count < 10, model should handle gracefully (not crash)."""
         X = pd.DataFrame(np.random.randn(5, 3), columns=["a", "b", "c"])
         y_neg = np.array([0, 1, 0, 1, 0])
         y_deep = np.array([0, 0, 1, 0, 0])
         y_rel = np.array([0, 0, 0, 1, 0])
 
         model = NegativeRiskModel()
-        with pytest.raises(ValueError, match="Not enough valid samples"):
-            model.fit(X, y_neg, y_deep, y_rel)
+        model.fit(X, y_neg, y_deep, y_rel)
+        
+        # Model should be fitted but marked as insufficient
+        assert model.is_fitted_
+        assert hasattr(model, '_insufficient_events_')
+        assert model._insufficient_events_ is True
+        
+        # Prediction should return NaN values
+        pred = model.predict(X)
+        assert pred.status == "INSUFFICIENT_EVENTS"
+        assert pred.df["negative_prob"].isna().all()
 
 
 class TestInvalidTargets:

@@ -1,0 +1,11 @@
+{
+  "target_month": "2026-02",
+  "best_val_smape_floor50": 31.590343475341797,
+  "best_epoch": 1,
+  "test_metrics": {
+    "val_smape_floor50": 26.611743927001953,
+    "val_delta_mae": 75.43060302734375,
+    "val_residual_mae": 77.50347900390625,
+    "val_rt_mae": 75.81989288330078
+  }
+}

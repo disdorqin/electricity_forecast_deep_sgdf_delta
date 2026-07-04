@@ -91,15 +91,25 @@ class TestFeatureImportance:
 
 
 class TestInsufficientData:
-    def test_too_few_samples_raises(self):
+    def test_too_few_samples_handled_gracefully(self):
+        """When sample count < 10, model should handle gracefully (not crash)."""
         X = pd.DataFrame(np.random.randn(5, 3), columns=["a", "b", "c"])
         y_spike = np.array([0, 1, 0, 1, 0])
         y_extreme = np.array([0, 0, 1, 0, 0])
         y_relative = np.array([0, 0, 0, 1, 0])
 
         model = SpikeRiskModel()
-        with pytest.raises(ValueError, match="Not enough valid samples"):
-            model.fit(X, y_spike, y_extreme, y_relative)
+        model.fit(X, y_spike, y_extreme, y_relative)
+        
+        # Model should be fitted but marked as insufficient
+        assert model.is_fitted_
+        assert hasattr(model, '_insufficient_events_')
+        assert model._insufficient_events_ is True
+        
+        # Prediction should return NaN values
+        pred = model.predict(X)
+        assert pred.status == "INSUFFICIENT_EVENTS"
+        assert pred.df["spike_prob"].isna().all()
 
 
 class TestInvalidTargets:

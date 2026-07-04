@@ -165,7 +165,7 @@ def multimonth_fixture(tmp_path):
 
 class TestOnlineModeExcludesYtrue:
     def test_no_y_true_column(self, multimonth_fixture):
-        pack, _ = build_risk_feature_pack_multimonth(
+        pack, monthly_manifest, _ = build_risk_feature_pack_multimonth(
             delta_supply_root=multimonth_fixture["delta_root"],
             spike_root=multimonth_fixture["spike_root"],
             negative_root=multimonth_fixture["negative_root"],
@@ -176,7 +176,7 @@ class TestOnlineModeExcludesYtrue:
         assert "rt_actual" not in pack.columns
 
     def test_online_columns_only(self, multimonth_fixture):
-        pack, _ = build_risk_feature_pack_multimonth(
+        pack, monthly_manifest, _ = build_risk_feature_pack_multimonth(
             delta_supply_root=multimonth_fixture["delta_root"],
             spike_root=multimonth_fixture["spike_root"],
             negative_root=multimonth_fixture["negative_root"],
@@ -198,7 +198,7 @@ class TestEvalModeIncludesYtrue:
             delta_df["y_true"] = np.random.RandomState(50).uniform(0, 500, len(delta_df))
             _write_monthly_predictions(multimonth_fixture["delta_root"], month, delta_df)
 
-        pack, _ = build_risk_feature_pack_multimonth(
+        pack, monthly_manifest, _ = build_risk_feature_pack_multimonth(
             delta_supply_root=multimonth_fixture["delta_root"],
             spike_root=multimonth_fixture["spike_root"],
             negative_root=multimonth_fixture["negative_root"],
@@ -212,7 +212,7 @@ class TestEvalModeIncludesYtrue:
 
 class TestRowUniqueness:
     def test_unique_keys_within_month(self, multimonth_fixture):
-        pack, _ = build_risk_feature_pack_multimonth(
+        pack, monthly_manifest, _ = build_risk_feature_pack_multimonth(
             delta_supply_root=multimonth_fixture["delta_root"],
             spike_root=multimonth_fixture["spike_root"],
             negative_root=multimonth_fixture["negative_root"],
@@ -228,7 +228,7 @@ class TestRowUniqueness:
             )
 
     def test_target_month_column_present(self, multimonth_fixture):
-        pack, _ = build_risk_feature_pack_multimonth(
+        pack, monthly_manifest, _ = build_risk_feature_pack_multimonth(
             delta_supply_root=multimonth_fixture["delta_root"],
             spike_root=multimonth_fixture["spike_root"],
             negative_root=multimonth_fixture["negative_root"],
@@ -257,7 +257,7 @@ class TestManifest:
     ]
 
     def test_manifest_has_required_fields(self, tmp_path, multimonth_fixture):
-        pack, monthly_manifest = build_risk_feature_pack_multimonth(
+        pack, monthly_manifest, status_sources = build_risk_feature_pack_multimonth(
             delta_supply_root=multimonth_fixture["delta_root"],
             spike_root=multimonth_fixture["spike_root"],
             negative_root=multimonth_fixture["negative_root"],
@@ -273,7 +273,7 @@ class TestManifest:
             assert field in manifest, f"Missing manifest field: {field}"
 
     def test_risk_feature_version_is_v1_1_0(self, tmp_path, multimonth_fixture):
-        pack, monthly_manifest = build_risk_feature_pack_multimonth(
+        pack, monthly_manifest, status_sources = build_risk_feature_pack_multimonth(
             delta_supply_root=multimonth_fixture["delta_root"],
             spike_root=multimonth_fixture["spike_root"],
             negative_root=multimonth_fixture["negative_root"],
@@ -289,7 +289,7 @@ class TestManifest:
         assert RISK_FEATURE_VERSION == "v1.1.0"
 
     def test_monthly_manifest_csv_created(self, tmp_path, multimonth_fixture):
-        pack, monthly_manifest = build_risk_feature_pack_multimonth(
+        pack, monthly_manifest, status_sources = build_risk_feature_pack_multimonth(
             delta_supply_root=multimonth_fixture["delta_root"],
             spike_root=multimonth_fixture["spike_root"],
             negative_root=multimonth_fixture["negative_root"],
@@ -357,7 +357,7 @@ class TestModuleNogoProducesNaN:
         _write_champion_summary(spike_root, spike_verdicts, "GO")
         _write_champion_summary(negative_root, negative_verdicts, "GO")
 
-        pack, monthly_manifest = build_risk_feature_pack_multimonth(
+        pack, monthly_manifest, status_sources = build_risk_feature_pack_multimonth(
             delta_supply_root=delta_root,
             spike_root=spike_root,
             negative_root=negative_root,

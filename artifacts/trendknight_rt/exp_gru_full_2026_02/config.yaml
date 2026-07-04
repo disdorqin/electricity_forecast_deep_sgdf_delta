@@ -1,0 +1,47 @@
+model_profile: trendknight_rt_gru
+profile_description: TrendKnightRT with GRU backbone
+target_month: 2026-02
+data_path: d:/作业/大创_挑战杯_互联网/大学生创新创业计划/大创实现/其他资料/all_model_train_and_eval/data/shandong_pmos_hourly.csv
+start_date: null
+end_date: null
+training:
+  epochs: 20
+  batch_size: 128
+  lr: 0.001
+  weight_decay: 0.0001
+  patience: 5
+  val_days: 30
+  seed: 42
+  amp: false
+  device: auto
+  fast_dev_run: false
+model:
+  input_dim: 34
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.1
+  backbone: gru
+  tcn_kernel_size: 3
+  tcn_dilation_base: 2
+  transformer_nhead: 4
+  transformer_dim_ff: 128
+  use_sgdfnet_residual_head: true
+  use_delta_head: true
+  use_confidence_head: true
+  use_period_bias: true
+  fusion_mode: C
+  hour_embed_dim: 8
+  segment_embed_dim: 8
+  num_hours: 25
+  num_segments: 3
+  multiscale: true
+  teacher_input_dim: 0
+profile:
+  backbone: gru
+  hidden_dim: 64
+  num_layers: 2
+  dropout: 0.1
+  fusion_mode: C
+  multiscale: true
+  description: TrendKnightRT with GRU backbone
+created_at: '2026-07-03T18:24:17'
