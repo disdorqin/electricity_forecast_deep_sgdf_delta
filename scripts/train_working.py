@@ -375,6 +375,23 @@ def train_and_evaluate(args):
     best_val_smape = float("inf")
     best_epoch = 0
     checkpoint_path = Path(args.out_dir) / "best_checkpoint.pt"
+    Path(args.out_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Prepare validation data (for checkpoint selection during training)
+    print("\nPreparing validation data...")
+    val_df_original = merged_df[merged_df["business_day"].isin(val_days)].copy()
+    val_days_sorted = sorted(val_df_original["business_day"].unique())
+    val_da_anchor_list = []
+    val_rt_actual_list = []
+    for day in val_days_sorted:
+        day_mask = val_df_original["business_day"] == day
+        day_rows = val_df_original[day_mask].sort_values("hour_business")
+        if len(day_rows) >= 20:
+            val_da_anchor_list.append(day_rows["da_anchor"].values)
+            val_rt_actual_list.append(day_rows["rt_actual"].values)
+    val_da_anchor_flat = np.concatenate([x for x in val_da_anchor_list])
+    val_rt_actual_flat = np.concatenate([x for x in val_rt_actual_list])
+    print(f"  Validation samples: {len(val_da_anchor_flat)}")
     
     print(f"\nTraining for {args.epochs} epochs...")
     for epoch in range(args.epochs):
