@@ -55,8 +55,17 @@ def load_da_anchor_baseline(
     if not data_path.exists():
         raise FileNotFoundError(f"Data file not found: {data_path}")
 
-    # Load data
-    df = pd.read_csv(data_path)
+    # Load data (try multiple encodings)
+    df = None
+    for encoding in ["utf-8", "gbk", "gb2312", "latin1", "cp1252"]:
+        try:
+            df = pd.read_csv(data_path, encoding=encoding)
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    
+    if df is None:
+        raise RuntimeError(f"Failed to read {data_path} with any encoding")
     
     # Find price column (try common names)
     price_col = None

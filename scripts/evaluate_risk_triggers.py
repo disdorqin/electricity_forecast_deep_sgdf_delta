@@ -151,7 +151,18 @@ def _load_actual_prices(
         DataFrame with actual prices.
     """
     data_path = Path(data_path)
-    df = pd.read_csv(data_path)
+    
+    # Try different encodings
+    df = None
+    for encoding in ["utf-8", "gbk", "gb2312", "latin1", "cp1252"]:
+        try:
+            df = pd.read_csv(data_path, encoding=encoding)
+            break
+        except (UnicodeDecodeError, UnicodeError):
+            continue
+    
+    if df is None:
+        raise RuntimeError(f"Failed to read {data_path} with any encoding")
     
     # Find price column
     price_col = None
@@ -601,3 +612,35 @@ def _generate_trigger_eval_report(
         f.write("- `trigger_eval_report.md`: This report.\n")
     
     return report_path
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Evaluate risk trigger alert quality")
+    parser.add_argument("--risk-pack", required=True, help="Path to risk feature pack CSV")
+    parser.add_argument("--risk-pack-manifest", default=None, help="Path to risk pack manifest JSON")
+    parser.add_argument("--data-path", default=None, help="Path to Shandong PMOS data (for y_true)")
+    parser.add_argument("--target-months", required=True, help="Comma-separated list of target months")
+    parser.add_argument("--out-dir", required=True, help="Output directory")
+    parser.add_argument("--negative-threshold", type=float, default=0.6, help="Negative alert threshold")
+    parser.add_argument("--spike-threshold", type=float, default=0.7, help="Spike alert threshold")
+    
+    args = parser.parse_args()
+    
+    config = RiskTriggerEvalConfig(
+        risk_pack_path=args.risk_pack,
+        manifest_path=args.risk_pack_manifest,
+        data_path=args.data_path,
+        target_months=args.target_months.split(","),
+        out_dir=args.out_dir,
+        negative_threshold=args.negative_threshold,
+        spike_threshold=args.spike_threshold,
+    )
+    
+    evaluator = RiskTriggerEvaluator()
+    result = evaluator.evaluate(config)
+    
+    # Export results
+    evaluator.export_results(result, config.out_dir)
+    
+    print(f"Trigger evaluation complete. Results: {config.out_dir}")
