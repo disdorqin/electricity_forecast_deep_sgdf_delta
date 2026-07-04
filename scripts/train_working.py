@@ -58,6 +58,12 @@ def parse_args():
                         help="Comma-separated clip candidates")
     parser.add_argument("--use-residual-history-features", action="store_true",
                         help="Use residual history features (residual_lag_*, etc.)")
+    parser.add_argument("--checkpoint-metric", type=str, default="val_final_smape",
+                        choices=["val_loss", "val_residual_smape", "val_final_smape"],
+                        help="Metric to select best checkpoint")
+    parser.add_argument("--loss", type=str, default="huber",
+                        choices=["huber", "mse", "hybrid"],
+                        help="Loss function")
     return parser.parse_args()
 
 
@@ -356,9 +362,19 @@ def train_and_evaluate(args):
     model = DeepRTSOTAModel(model_config).to(device)
     print(f"\nModel created: {args.model_profile}, params: {sum(p.numel() for p in model.parameters())}")
     
-    # Train
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    criterion = nn.SmoothL1Loss()
+    # Train with checkpoint saving
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    
+    if args.loss == "huber":
+        criterion = nn.SmoothL1Loss()
+    elif args.loss == "mse":
+        criterion = nn.MSELoss()
+    else:
+        criterion = nn.SmoothL1Loss()  # default huber
+    
+    best_val_smape = float("inf")
+    best_epoch = 0
+    checkpoint_path = Path(args.out_dir) / "best_checkpoint.pt"
     
     print(f"\nTraining for {args.epochs} epochs...")
     for epoch in range(args.epochs):
@@ -374,8 +390,39 @@ def train_and_evaluate(args):
             train_loss += loss.item()
         train_loss /= len(train_loader)
         
-        if (epoch + 1) % 10 == 0:
+        # Evaluate on validation set every 5 epochs
+        if (epoch + 1) % 5 == 0 or epoch == 0:
+            model.eval()
+            val_preds = []
+            with torch.no_grad():
+                for x_batch, y_batch in val_loader:
+                    x_batch, y_batch = x_batch.to(device), y_batch.to(device)
+                    pred, _ = model(x_batch)
+                    val_preds.append(pred.cpu().numpy())
+            val_preds = np.concatenate(val_preds, axis=0)
+            
+            # Compute validation sMAPE (final price)
+            val_residual_pred_flat = val_preds.flatten() if val_preds.ndim > 1 else val_preds
+            val_final_pred_flat = val_da_anchor_flat + apply_shrink_gate(
+                val_residual_pred_flat, 1.0, 300.0
+            )
+            val_smape = smape_floor50(val_rt_actual_flat, val_final_pred_flat)
+            
+            if val_smape < best_val_smape:
+                best_val_smape = val_smape
+                best_epoch = epoch + 1
+                torch.save(model.state_dict(), checkpoint_path)
+            
+            print(f"  Epoch {epoch+1}/{args.epochs}: loss={train_loss:.4f}, val_sMAPE={val_smape:.4f} (best={best_val_smape:.4f} @ epoch {best_epoch})")
+        elif (epoch + 1) % 10 == 0:
             print(f"  Epoch {epoch+1}/{args.epochs}: loss={train_loss:.4f}")
+    
+    # Load best checkpoint
+    if checkpoint_path.exists():
+        print(f"\nLoading best checkpoint from epoch {best_epoch}...")
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+    else:
+        print(f"\nNo best checkpoint found, using last epoch...")
     
     # Evaluate on validation set to select alpha and clip
     print("\nEvaluating on validation set to select alpha and clip...")
