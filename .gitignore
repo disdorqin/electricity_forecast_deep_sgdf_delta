@@ -24,6 +24,7 @@ env/
 # Data and outputs (NEVER commit)
 reports/local/
 outputs/
+data/
 data/local_ledger/
 *.pkl
 *.pt
