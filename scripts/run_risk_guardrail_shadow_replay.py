@@ -107,6 +107,14 @@ def parse_args():
         help="Comma-separated blend weights for policy sweep.",
     )
     
+    parser.add_argument(
+        "--require-y-true",
+        type=str,
+        default="true",
+        choices=["true", "false"],
+        help="Require y_true for evaluation (default: true). If true, fail if y_true is missing.",
+    )
+    
     return parser.parse_args()
 
 
@@ -151,6 +159,26 @@ def main():
     
     engine = RiskShadowReplay()
     result = engine.run(config)
+    
+    # Check if y_true is required but missing
+    require_y_true = args.require_y_true.lower() == "true"
+    
+    if require_y_true:
+        input_diag_path = Path(args.out_dir) / "input_diagnostics.json"
+        if input_diag_path.exists():
+            with open(input_diag_path, "r") as f:
+                diagnostics = json.load(f)
+            
+            if not diagnostics.get("has_y_true") or diagnostics.get("y_true_non_null_count", 0) == 0:
+                print("\n" + "=" * 80)
+                print("ERROR: y_true is required but missing or all null!")
+                print("Input diagnostics:")
+                print(json.dumps(diagnostics, indent=2))
+                print("=" * 80)
+                print("\nTo run without y_true, use --require-y-true false")
+                sys.exit(1)
+        else:
+            print("\nWARNING: input_diagnostics.json not found, cannot verify y_true.")
     
     # Print warnings
     if result.warnings:

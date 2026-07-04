@@ -4,7 +4,7 @@ Evaluates alert quality WITHOUT modifying prices.
 
 Metrics:
   - negative alert precision/recall/F1
-  - spike alert precision/recall/F1
+  - spike alert precision/recall/F1 (configurable target: spike|extreme_spike|relative_spike)
   - combined high-risk alert precision/recall/F1
   - alert rate
   - top-k capture
@@ -18,6 +18,8 @@ Usage:
     --risk-pack-manifest reports/local/risk_modules/risk_feature_pack_2026_01_05/manifest.json \
     --data-path ../electricity_forecast_model2.0_exp/data/shandong_pmos_hourly.csv \
     --target-months 2026-01,2026-02,2026-03,2026-04,2026-05 \
+    --spike-target spike \
+    --spike-threshold 500 \
     --out-dir reports/local/ledger_1/trigger_eval_2026_01_05
 """
 
@@ -50,6 +52,12 @@ class RiskTriggerEvalConfig:
     negative_threshold: float = 0.6
     spike_threshold: float = 0.7
     delta_supply_threshold: float = 0.6
+    
+    # Spike target configuration
+    spike_target: str = "spike"  # "spike" | "extreme_spike" | "relative_spike"
+    spike_threshold_price: float = 500.0  # For spike target
+    extreme_spike_threshold_price: float = 800.0  # For extreme_spike target
+    relative_spike_threshold: float = 200.0  # For relative_spike target
     
     # Top-k for capture
     top_k_list: List[int] = field(default_factory=lambda: [5, 10, 20])
@@ -112,8 +120,37 @@ def evaluate_risk_triggers(config: RiskTriggerEvalConfig) -> RiskTriggerEvalResu
     # Evaluate negative alerts
     negative_eval = _evaluate_negative_alerts(df, config)
     
-    # Evaluate spike alerts
-    spike_eval = _evaluate_spike_alerts(df, config)
+    # Evaluate spike alerts for all targets
+    spike_eval_spike = None
+    spike_eval_extreme = None
+    spike_eval_relative = None
+    
+    # Save original config
+    original_spike_target = config.spike_target
+    original_spike_threshold_price = config.spike_threshold_price
+    original_extreme_spike_threshold_price = config.extreme_spike_threshold_price
+    original_relative_spike_threshold = config.relative_spike_threshold
+    
+    # Evaluate spike target
+    config.spike_target = "spike"
+    config.spike_threshold_price = 500.0
+    spike_eval_spike = _evaluate_spike_alerts(df, config)
+    
+    # Evaluate extreme_spike target
+    config.spike_target = "extreme_spike"
+    config.extreme_spike_threshold_price = 800.0
+    spike_eval_extreme = _evaluate_spike_alerts(df, config)
+    
+    # Evaluate relative_spike target
+    config.spike_target = "relative_spike"
+    config.relative_spike_threshold = 200.0
+    spike_eval_relative = _evaluate_spike_alerts(df, config)
+    
+    # Restore original config
+    config.spike_target = original_spike_target
+    config.spike_threshold_price = original_spike_threshold_price
+    config.extreme_spike_threshold_price = original_extreme_spike_threshold_price
+    config.relative_spike_threshold = original_relative_spike_threshold
     
     # Evaluate combined high-risk alerts
     combined_eval = _evaluate_combined_alerts(df, config)
@@ -124,7 +161,9 @@ def evaluate_risk_triggers(config: RiskTriggerEvalConfig) -> RiskTriggerEvalResu
     # Compile summary
     summary = {
         "negative": negative_eval,
-        "spike": spike_eval,
+        "spike": spike_eval_spike,
+        "extreme_spike": spike_eval_extreme,
+        "relative_spike": spike_eval_relative,
         "combined": combined_eval,
         "delta_supply": delta_eval,
     }
@@ -288,9 +327,19 @@ def _evaluate_spike_alerts(
     if "y_true" not in df.columns or "spike_prob" not in df.columns:
         return {"error": "Missing y_true or spike_prob"}
     
-    # Define spike events (y_true > 1000, e.g., extreme price)
-    spike_threshold_price = 1000.0
-    true_spike = (df["y_true"] > spike_threshold_price).values
+    # Define spike events based on spike_target
+    if config.spike_target == "spike":
+        spike_threshold_price = config.spike_threshold_price
+        true_spike = (df["y_true"] > spike_threshold_price).values
+    elif config.spike_target == "extreme_spike":
+        spike_threshold_price = config.extreme_spike_threshold_price
+        true_spike = (df["y_true"] > spike_threshold_price).values
+    elif config.spike_target == "relative_spike":
+        # Relative spike: y_true > median + relative_spike_threshold
+        median_price = df["y_true"].median()
+        true_spike = (df["y_true"] > median_price + config.relative_spike_threshold).values
+    else:
+        raise ValueError(f"Unknown spike_target: {config.spike_target}")
     
     # Predicted spike risk
     pred_spike = (df["spike_prob"] >= config.spike_threshold).values
@@ -329,6 +378,8 @@ def _evaluate_spike_alerts(
         "alert_rate": alert_rate,
         "n_true_spike": int(np.sum(true_spike)),
         "n_pred_spike": int(np.sum(pred_spike)),
+        "spike_target": config.spike_target,
+        "spike_threshold_used": spike_threshold_price if config.spike_target != "relative_spike" else config.relative_spike_threshold,
         **top_k_capture,
     }
 
@@ -594,22 +645,25 @@ def _generate_trigger_eval_report(
             
             f.write("\n")
         
-        # Spike alerts
-        spike = result.summary.get("spike", {})
-        if "error" not in spike:
-            f.write("### Spike Alerts\n\n")
-            f.write(f"- **Precision**: {spike.get('precision', 0.0):.4f}\n")
-            f.write(f"- **Recall**: {spike.get('recall', 0.0):.4f}\n")
-            f.write(f"- **F1**: {spike.get('f1', 0.0):.4f}\n")
-            f.write(f"- **Alert rate**: {spike.get('alert_rate', 0.0):.2%}\n")
-            f.write(f"- **N true spike**: {spike.get('n_true_spike', 0)}\n")
-            f.write(f"- **N pred spike**: {spike.get('n_pred_spike', 0)}\n")
-            
-            for key, value in spike.items():
-                if key.startswith("top_"):
-                    f.write(f"- **{key.replace('_', ' ').title()}**: {value:.4f}\n")
-            
-            f.write("\n")
+        # Spike alerts (all targets)
+        for spike_target in ["spike", "extreme_spike", "relative_spike"]:
+            spike = result.summary.get(spike_target, {})
+            if spike and "error" not in spike:
+                f.write(f"### {spike_target.replace('_', ' ').title()} Alerts\n\n")
+                f.write(f"- **Target**: {spike.get('spike_target', spike_target)}\n")
+                f.write(f"- **Threshold used**: {spike.get('spike_threshold_used', 'N/A')}\n")
+                f.write(f"- **Precision**: {spike.get('precision', 0.0):.4f}\n")
+                f.write(f"- **Recall**: {spike.get('recall', 0.0):.4f}\n")
+                f.write(f"- **F1**: {spike.get('f1', 0.0):.4f}\n")
+                f.write(f"- **Alert rate**: {spike.get('alert_rate', 0.0):.2%}\n")
+                f.write(f"- **N true {spike_target}**: {spike.get('n_true_spike', 0)}\n")
+                f.write(f"- **N pred {spike_target}**: {spike.get('n_pred_spike', 0)}\n")
+                
+                for key, value in spike.items():
+                    if key.startswith("top_"):
+                        f.write(f"- **{key.replace('_', ' ').title()}**: {value:.4f}\n")
+                
+                f.write("\n")
         
         f.write("## Conclusion\n\n")
         f.write("Risk trigger evaluation complete.\n")
@@ -633,6 +687,11 @@ if __name__ == "__main__":
     parser.add_argument("--out-dir", required=True, help="Output directory")
     parser.add_argument("--negative-threshold", type=float, default=0.6, help="Negative alert threshold")
     parser.add_argument("--spike-threshold", type=float, default=0.7, help="Spike alert threshold")
+    parser.add_argument("--spike-target", type=str, default="spike", choices=["spike", "extreme_spike", "relative_spike"],
+                        help="Spike target type (spike>=500, extreme_spike>=800, relative_spike>median+200)")
+    parser.add_argument("--spike-threshold-price", type=float, default=500.0, help="Price threshold for spike target")
+    parser.add_argument("--extreme-spike-threshold-price", type=float, default=800.0, help="Price threshold for extreme_spike target")
+    parser.add_argument("--relative-spike-threshold", type=float, default=200.0, help="Relative threshold for relative_spike target")
     
     args = parser.parse_args()
     
@@ -644,6 +703,10 @@ if __name__ == "__main__":
         out_dir=args.out_dir,
         negative_threshold=args.negative_threshold,
         spike_threshold=args.spike_threshold,
+        spike_target=args.spike_target,
+        spike_threshold_price=args.spike_threshold_price,
+        extreme_spike_threshold_price=args.extreme_spike_threshold_price,
+        relative_spike_threshold=args.relative_spike_threshold,
     )
     
     evaluator = RiskTriggerEvaluator()

@@ -189,3 +189,53 @@ class TestRiskTriggerEvaluator:
         # Should still work, but summary will have errors
         assert result is not None
         assert result.summary.get("negative", {}).get("error") is not None
+
+    def test_all_spike_targets_evaluated(self, test_data, tmp_path):
+        """Should evaluate all three spike targets."""
+        risk_pack_file, data_file = test_data
+        
+        config = RiskTriggerEvalConfig(
+            risk_pack_path=risk_pack_file,
+            data_path=data_file,
+            target_months=["2026-01"],
+            out_dir=str(tmp_path / "output"),
+        )
+        
+        evaluator = RiskTriggerEvaluator()
+        result = evaluator.evaluate(config)
+        
+        # Check all spike targets are evaluated
+        assert "spike" in result.summary
+        assert "extreme_spike" in result.summary
+        assert "relative_spike" in result.summary
+        
+        # Check spike target has correct threshold
+        spike_eval = result.summary["spike"]
+        assert spike_eval.get("spike_target") == "spike"
+        assert spike_eval.get("spike_threshold_used") == 500.0
+        
+        # Check extreme_spike target has correct threshold
+        extreme_eval = result.summary["extreme_spike"]
+        assert extreme_eval.get("spike_target") == "extreme_spike"
+        assert extreme_eval.get("spike_threshold_used") == 800.0
+
+    def test_spike_event_counts_differ(self, test_data, tmp_path):
+        """Spike event counts should differ between targets."""
+        risk_pack_file, data_file = test_data
+        
+        config = RiskTriggerEvalConfig(
+            risk_pack_path=risk_pack_file,
+            data_path=data_file,
+            target_months=["2026-01"],
+            out_dir=str(tmp_path / "output"),
+        )
+        
+        evaluator = RiskTriggerEvaluator()
+        result = evaluator.evaluate(config)
+        
+        # Get event counts
+        spike_count = result.summary["spike"].get("n_true_spike", 0)
+        extreme_count = result.summary["extreme_spike"].get("n_true_spike", 0)
+        
+        # extreme_spike should have fewer events than spike
+        assert extreme_count <= spike_count

@@ -17,6 +17,7 @@ Policy Sweep:
     blend_weight: 0.05, 0.1, 0.2
 
 Outputs:
+    input_diagnostics.json
     shadow_metrics.csv
     monthly_metrics.csv
     period_metrics.csv
@@ -42,6 +43,7 @@ from datetime import datetime
 from models.deep_sgdf_delta.base_prediction_adapter import BasePredictionAdapter, BasePredictionLoadResult
 from models.deep_sgdf_delta.risk_pack_loader import RiskPackLoader, RiskPackLoadResult
 from models.deep_sgdf_delta.risk_guardrail_policy import RiskGuardrailPolicy, GuardrailPolicyConfig
+from models.deep_sgdf_delta.metrics import smape_floor50 as canonical_smape_floor50
 
 
 @dataclass
@@ -128,7 +130,7 @@ def run_shadow_replay(config: ShadowReplayConfig) -> ShadowReplayResult:
         raise RuntimeError(f"Failed to load risk pack: {risk_result.error_message}")
     
     # Step 3: Merge base predictions and risk pack
-    merged_df = _merge_base_and_risk(base_result.df, risk_result.df)
+    merged_df = _merge_base_and_risk(base_result.df, risk_result.df, out_dir=Path(config.out_dir))
     
     # Step 4: Policy sweep
     policy_sweep_results = []
@@ -206,12 +208,14 @@ def run_shadow_replay(config: ShadowReplayConfig) -> ShadowReplayResult:
 def _merge_base_and_risk(
     base_df: pd.DataFrame,
     risk_df: pd.DataFrame,
+    out_dir: Optional[Path] = None,
 ) -> pd.DataFrame:
     """Merge base predictions and risk pack.
 
     Args:
         base_df: DataFrame with base predictions.
         risk_df: DataFrame with risk scores.
+        out_dir: Output directory for diagnostics (optional).
 
     Returns:
         Merged DataFrame.
@@ -255,7 +259,55 @@ def _merge_base_and_risk(
         if nan_count > 0:
             print(f"Warning: {nan_count} rows have NaN in {col}")
     
+    # Generate input diagnostics
+    diagnostics = _generate_input_diagnostics(merged, available_risk_cols)
+    
+    # Save diagnostics if out_dir provided
+    if out_dir is not None:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / "input_diagnostics.json", "w") as f:
+            json.dump(diagnostics, f, indent=2, default=str)
+        print(f"Input diagnostics saved to {out_dir / 'input_diagnostics.json'}")
+    
     return merged
+
+
+def _generate_input_diagnostics(
+    merged_df: pd.DataFrame,
+    risk_cols: List[str],
+) -> Dict[str, Any]:
+    """Generate input diagnostics after merge.
+
+    Args:
+        merged_df: Merged DataFrame.
+        risk_cols: List of risk columns.
+
+    Returns:
+        Dict with diagnostics.
+    """
+    diagnostics = {
+        "n_rows": len(merged_df),
+        "has_y_true": "y_true" in merged_df.columns,
+        "y_true_non_null_count": 0,
+        "base_pred_non_null_count": 0,
+        "risk_cols_non_null_count": {},
+    }
+    
+    # y_true diagnostics
+    if "y_true" in merged_df.columns:
+        diagnostics["y_true_non_null_count"] = int(merged_df["y_true"].notna().sum())
+    
+    # base_pred diagnostics
+    if "base_pred" in merged_df.columns:
+        diagnostics["base_pred_non_null_count"] = int(merged_df["base_pred"].notna().sum())
+    
+    # Risk columns diagnostics
+    for col in risk_cols:
+        if col in merged_df.columns and col != "y_true":
+            diagnostics["risk_cols_non_null_count"][col] = int(merged_df[col].notna().sum())
+    
+    return diagnostics
 
 
 def _evaluate_guardrail(df: pd.DataFrame) -> Dict[str, float]:
@@ -265,46 +317,71 @@ def _evaluate_guardrail(df: pd.DataFrame) -> Dict[str, float]:
         df: DataFrame with base_pred, risk_adjusted_pred, and y_true.
 
     Returns:
-        Dict of metrics.
+        Dict of metrics with fixed schema. Always returns all required columns.
     """
-    metrics = {}
+    # Define the full metric schema with default values (NaN)
+    metrics = {
+        "base_sMAPE_floor50": np.nan,
+        "adjusted_sMAPE_floor50": np.nan,
+        "sMAPE_floor50_improvement": np.nan,
+        "base_sMAPE": np.nan,
+        "adjusted_sMAPE": np.nan,
+        "sMAPE_improvement": np.nan,
+        "base_MAE": np.nan,
+        "adjusted_MAE": np.nan,
+        "MAE_improvement": np.nan,
+        "base_RMSE": np.nan,
+        "adjusted_RMSE": np.nan,
+        "RMSE_improvement": np.nan,
+        "trigger_rate": np.nan,
+        "evaluation_status": "MISSING_Y_TRUE",
+    }
     
     # Check if y_true is available
     if "y_true" not in df.columns:
-        return {"sMAPE_floor50": np.nan, "sMAPE": np.nan}
+        return metrics
     
-    # sMAPE_floor50
     y_true = df["y_true"].values
     base_pred = df["base_pred"].values
     risk_adjusted = df["risk_adjusted_pred"].values
     
-    # Base sMAPE_floor50
-    base_smape = _calc_smape_floor50(y_true, base_pred)
-    adjusted_smape = _calc_smape_floor50(y_true, risk_adjusted)
+    # Check for non-null y_true
+    valid_mask = np.isfinite(y_true) & np.isfinite(base_pred) & np.isfinite(risk_adjusted)
+    
+    if not np.any(valid_mask):
+        return metrics
+    
+    y_true_valid = y_true[valid_mask]
+    base_pred_valid = base_pred[valid_mask]
+    risk_adjusted_valid = risk_adjusted[valid_mask]
+    
+    # sMAPE_floor50 (using canonical implementation from metrics.py)
+    base_smape = canonical_smape_floor50(y_true_valid, base_pred_valid)
+    adjusted_smape = canonical_smape_floor50(y_true_valid, risk_adjusted_valid)
     
     metrics["base_sMAPE_floor50"] = base_smape
     metrics["adjusted_sMAPE_floor50"] = adjusted_smape
     metrics["sMAPE_floor50_improvement"] = base_smape - adjusted_smape
     
     # sMAPE
-    base_smape_full = _calc_smape(y_true, base_pred)
-    adjusted_smape_full = _calc_smape(y_true, risk_adjusted)
+    base_smape_full = _calc_smape(y_true_valid, base_pred_valid)
+    adjusted_smape_full = _calc_smape(y_true_valid, risk_adjusted_valid)
     
     metrics["base_sMAPE"] = base_smape_full
     metrics["adjusted_sMAPE"] = adjusted_smape_full
     metrics["sMAPE_improvement"] = base_smape_full - adjusted_smape_full
     
     # MAE
-    base_mae = np.mean(np.abs(y_true - base_pred))
-    adjusted_mae = np.mean(np.abs(y_true - risk_adjusted))
+    base_mae = np.mean(np.abs(y_true_valid - base_pred_valid))
+    adjusted_mae = np.mean(np.abs(y_true_valid - risk_adjusted_valid))
     
     metrics["base_MAE"] = base_mae
     metrics["adjusted_MAE"] = adjusted_mae
     metrics["MAE_improvement"] = base_mae - adjusted_mae
     
     # RMSE
-    base_rmse = np.sqrt(np.mean((y_true - base_pred) ** 2))
-    adjusted_rmse = np.sqrt(np.mean((y_true - risk_adjusted) ** 2))
+    base_rmse = np.sqrt(np.mean((y_true_valid - base_pred_valid) ** 2))
+    adjusted_rmse = np.sqrt(np.mean((y_true_valid - risk_adjusted_valid) ** 2))
     
     metrics["base_RMSE"] = base_rmse
     metrics["adjusted_RMSE"] = adjusted_rmse
@@ -315,31 +392,9 @@ def _evaluate_guardrail(df: pd.DataFrame) -> Dict[str, float]:
         trigger_rate = df["guardrail_triggered"].mean()
         metrics["trigger_rate"] = trigger_rate
     
+    metrics["evaluation_status"] = "SUCCESS"
+    
     return metrics
-
-
-def _calc_smape_floor50(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Calculate sMAPE with floor 50.
-
-    Args:
-        y_true: True values.
-        y_pred: Predicted values.
-
-    Returns:
-        sMAPE_floor50.
-    """
-    # Floor y_true at 50
-    y_true_floored = np.maximum(y_true, 50)
-    
-    # sMAPE
-    numerator = np.abs(y_pred - y_true_floored)
-    denominator = (np.abs(y_pred) + np.abs(y_true_floored)) / 2
-    
-    # Avoid division by zero
-    mask = denominator > 0
-    smape = np.mean(numerator[mask] / denominator[mask])
-    
-    return smape * 100  # Convert to percentage
 
 
 def _calc_smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -371,8 +426,40 @@ def _select_champion_policy(policy_sweep_df: pd.DataFrame) -> Dict[str, Any]:
     Returns:
         Dict with champion policy config and metrics.
     """
+    # Check if sMAPE_floor50_improvement column exists and has non-NaN values
+    if "sMAPE_floor50_improvement" not in policy_sweep_df.columns:
+        # Fallback to alert_only policy
+        return {
+            "negative_threshold": 0.5,
+            "spike_threshold": 0.5,
+            "blend_weight": 0.0,
+            "selection_status": "NO_VALID_EVAL_METRIC",
+            "metrics": {
+                "negative_threshold": 0.5,
+                "spike_threshold": 0.5,
+                "blend_weight": 0.0,
+            },
+        }
+    
+    # Filter out NaN improvements
+    valid_df = policy_sweep_df.dropna(subset=["sMAPE_floor50_improvement"])
+    
+    if len(valid_df) == 0:
+        # Fallback to alert_only policy
+        return {
+            "negative_threshold": 0.5,
+            "spike_threshold": 0.5,
+            "blend_weight": 0.0,
+            "selection_status": "NO_VALID_EVAL_METRIC",
+            "metrics": {
+                "negative_threshold": 0.5,
+                "spike_threshold": 0.5,
+                "blend_weight": 0.0,
+            },
+        }
+    
     # Sort by sMAPE_floor50_improvement (descending)
-    sorted_df = policy_sweep_df.sort_values(
+    sorted_df = valid_df.sort_values(
         "sMAPE_floor50_improvement",
         ascending=False,
     )
@@ -384,6 +471,7 @@ def _select_champion_policy(policy_sweep_df: pd.DataFrame) -> Dict[str, Any]:
         "negative_threshold": top["negative_threshold"],
         "spike_threshold": top["spike_threshold"],
         "blend_weight": top["blend_weight"],
+        "selection_status": "SUCCESS",
         "metrics": top.to_dict(),
     }
     

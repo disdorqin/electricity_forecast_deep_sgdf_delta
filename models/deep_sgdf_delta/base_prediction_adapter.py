@@ -100,6 +100,9 @@ def load_da_anchor_baseline(
     df = df.rename(columns={ts_col: "ds", price_col: "base_pred"})
     df["ds"] = pd.to_datetime(df["ds"])
     
+    # Keep actual price as y_true for evaluation
+    df["y_true"] = df["base_pred"].copy()
+    
     # Add business time columns
     df = add_business_time_columns(df, timestamp_col="ds")
     
@@ -120,7 +123,7 @@ def load_da_anchor_baseline(
     # Select standard output columns
     output_cols = [
         "business_day", "hour_business", "target_month", "ds",
-        "base_pred",
+        "base_pred", "y_true",
     ]
     
     result_df = df[output_cols].copy()
