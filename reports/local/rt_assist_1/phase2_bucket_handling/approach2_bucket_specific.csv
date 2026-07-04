@@ -1,0 +1,5 @@
+﻿bucket,bucket_name,best_alpha,best_clip,best_improvement,n_rows
+0,Normal,0.1,0,0.1047068109140179,1571
+1,Negative DA,0.1,0,0.5680301788335527,173
+2,Large residual,0.1,0,3.2982299592946447,411
+3,Spike,0.1,0,2.506157654333194,53
