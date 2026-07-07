@@ -1,0 +1,119 @@
+{
+  "available": {
+    "DA_anchor": {
+      "overall": 26.95,
+      "months": {
+        "2025-03": 31.86,
+        "2025-04": 28.98,
+        "2025-05": 26.89,
+        "2025-06": 24.43,
+        "2025-09": 19.57,
+        "2025-10": 19.73,
+        "2026-03": 31.79,
+        "2026-04": 27.08,
+        "2026-05": 25.67,
+        "2026-06": 33.46
+      }
+    },
+    "sgdfnet": {
+      "overall": 20.2,
+      "months": {
+        "2025-03": 22.89,
+        "2025-04": 16.44,
+        "2025-05": 17.21,
+        "2025-06": 16.82,
+        "2025-09": 13.75,
+        "2025-10": 16.69,
+        "2026-03": 27.73,
+        "2026-04": 18.87,
+        "2026-05": 20.3,
+        "2026-06": 31.29
+      }
+    },
+    "timemixer": {
+      "overall": 44.4,
+      "months": {
+        "2025-03": 50.79,
+        "2025-04": null,
+        "2025-05": null,
+        "2025-06": null,
+        "2025-09": 38.01,
+        "2025-10": null,
+        "2026-03": null,
+        "2026-04": null,
+        "2026-05": null,
+        "2026-06": null
+      }
+    }
+  },
+  "production_feasible": {
+    "DA_anchor": {
+      "overall": 26.95,
+      "months": {
+        "2025-03": 31.86,
+        "2025-04": 28.98,
+        "2025-05": 26.89,
+        "2025-06": 24.43,
+        "2025-09": 19.57,
+        "2025-10": 19.73,
+        "2026-03": 31.79,
+        "2026-04": 27.08,
+        "2026-05": 25.67,
+        "2026-06": 33.46
+      }
+    },
+    "sgdfnet": {
+      "overall": 20.2,
+      "months": {
+        "2025-03": 22.89,
+        "2025-04": 16.44,
+        "2025-05": 17.21,
+        "2025-06": 16.82,
+        "2025-09": 13.75,
+        "2025-10": 16.69,
+        "2026-03": 27.73,
+        "2026-04": 18.87,
+        "2026-05": 20.3,
+        "2026-06": 31.29
+      }
+    }
+  },
+  "scene_breakdown": {
+    "period_1_8": {
+      "count": 304,
+      "DA_anchor_smape": NaN,
+      "sgdfnet_smape": NaN,
+      "delta_sgdfnet_vs_DA": NaN
+    },
+    "period_9_16": {
+      "count": 304,
+      "DA_anchor_smape": NaN,
+      "sgdfnet_smape": NaN,
+      "delta_sgdfnet_vs_DA": NaN
+    },
+    "period_17_24": {
+      "count": 304,
+      "DA_anchor_smape": NaN,
+      "sgdfnet_smape": NaN,
+      "delta_sgdfnet_vs_DA": NaN
+    },
+    "hour_spike": {
+      "count": 5359,
+      "DA_anchor_smape": 23.41,
+      "sgdfnet_smape": 19.26,
+      "delta_sgdfnet_vs_DA": -4.15
+    },
+    "hour_negative": {
+      "count": 1438,
+      "DA_anchor_smape": 24.97,
+      "sgdfnet_smape": 11.04,
+      "delta_sgdfnet_vs_DA": -13.92
+    },
+    "hour_normal": {
+      "count": 499,
+      "DA_anchor_smape": NaN,
+      "sgdfnet_smape": NaN,
+      "delta_sgdfnet_vs_DA": NaN
+    }
+  }
+}

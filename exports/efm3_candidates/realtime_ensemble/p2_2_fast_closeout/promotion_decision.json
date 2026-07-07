@@ -1,0 +1,12 @@
+{
+  "p2_2_fast_closeout": {
+    "recommended_status": "experimental_result",
+    "justification": "sgdfnet (KEEP) provides a solid CPU-based realtime baseline. However, the 2.5 four-model fusion cannot be verified because rt916 (NOT_PRODUCTION_READY, 1840s/day), timesfm (SKIPPED_PENDING, 0 days), and timemixer (CACHE_ONLY, 35/363 days) all lack sufficient coverage. The central question of P2.2 — whether 2.5 realtime four-model fusion is effective on calm/spring-summer windows — remains unanswered due to slow model elimination. sgdfnet alone does not represent the 2.5 fusion. The experimental result shows sgdfnet vs DA anchor which informs model selection but does not validate the ensemble strategy.",
+    "slow_model_decisions": {
+      "rt916": "NOT_PRODUCTION_READY (1840s/day, GPU unstable)",
+      "timemixer": "CACHE_ONLY (295s/day, partial coverage)",
+      "timesfm": "SKIPPED_PENDING (never dispatched)",
+      "sgdfnet": "KEEP (40s/day, CPU, 100% coverage)"
+    }
+  }
+}

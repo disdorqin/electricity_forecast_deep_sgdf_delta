@@ -1,0 +1,23 @@
+{
+  "experiment_id": "p2_2_fast_closeout",
+  "timestamp": "2026-07-07T07:15:22.544552+00:00",
+  "description": "P2.2 Fast Closeout — multi-season realtime ensemble verification terminated early",
+  "files": [
+    "available_model_metrics.json",
+    "production_feasible_metrics.json",
+    "model_runtime_report.md",
+    "ledger_backfill_report.md",
+    "partial_monthly_metrics.json",
+    "p2_2_fast_closeout_report.md",
+    "promotion_decision.json"
+  ],
+  "data_coverage": {
+    "sgdfnet": 363,
+    "timemixer": 35,
+    "rt916": 19,
+    "timesfm": 1
+  },
+  "total_target_days": 363,
+  "elapsed_min": 2.2,
+  "machine": "RTX 4060 8GB + epf-2 conda"
+}

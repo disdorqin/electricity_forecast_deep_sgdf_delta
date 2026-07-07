@@ -1,0 +1,140 @@
+{
+  "DA_anchor": {
+    "monthly": {
+      "2025-03": {
+        "smape_floor50": 31.86,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2025-04": {
+        "smape_floor50": 28.98,
+        "days_covered": 30,
+        "days_total": 30
+      },
+      "2025-05": {
+        "smape_floor50": 26.89,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2025-06": {
+        "smape_floor50": 24.43,
+        "days_covered": 30,
+        "days_total": 30
+      },
+      "2025-09": {
+        "smape_floor50": 19.57,
+        "days_covered": 30,
+        "days_total": 30
+      },
+      "2025-10": {
+        "smape_floor50": 19.73,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2026-03": {
+        "smape_floor50": 31.79,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2026-04": {
+        "smape_floor50": 27.08,
+        "days_covered": 30,
+        "days_total": 30
+      },
+      "2026-05": {
+        "smape_floor50": 25.67,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2026-06": {
+        "smape_floor50": 33.46,
+        "days_covered": 29,
+        "days_total": 30
+      }
+    },
+    "overall_smape": [
+      31.86,
+      28.98,
+      26.89,
+      24.43,
+      19.57,
+      19.73,
+      31.79,
+      27.08,
+      25.67,
+      33.46
+    ],
+    "total_days": 305,
+    "covered_days": 304,
+    "overall": 26.95
+  },
+  "sgdfnet": {
+    "monthly": {
+      "2025-03": {
+        "smape_floor50": 22.89,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2025-04": {
+        "smape_floor50": 16.44,
+        "days_covered": 30,
+        "days_total": 30
+      },
+      "2025-05": {
+        "smape_floor50": 17.21,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2025-06": {
+        "smape_floor50": 16.82,
+        "days_covered": 30,
+        "days_total": 30
+      },
+      "2025-09": {
+        "smape_floor50": 13.75,
+        "days_covered": 30,
+        "days_total": 30
+      },
+      "2025-10": {
+        "smape_floor50": 16.69,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2026-03": {
+        "smape_floor50": 27.73,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2026-04": {
+        "smape_floor50": 18.87,
+        "days_covered": 30,
+        "days_total": 30
+      },
+      "2026-05": {
+        "smape_floor50": 20.3,
+        "days_covered": 31,
+        "days_total": 31
+      },
+      "2026-06": {
+        "smape_floor50": 31.29,
+        "days_covered": 28,
+        "days_total": 30
+      }
+    },
+    "overall_smape": [
+      22.89,
+      16.44,
+      17.21,
+      16.82,
+      13.75,
+      16.69,
+      27.73,
+      18.87,
+      20.3,
+      31.29
+    ],
+    "total_days": 305,
+    "covered_days": 303,
+    "overall": 20.2
+  }
+}
