@@ -1,0 +1,39 @@
+{
+  "recommended_status": "no_go",
+  "reason": "No deep realtime candidate beats the DA-anchor (31.11%) / faithful SGDFNet D14 (31.99%) single-model baseline; all new deep models (tcn/gru/linear/dlinear) land 34-35%, and abs-target TCN 46%. The 2.5 fused realtime (~23%) is an ensemble of 4 diverse models; single-architecture residual learning cannot reach it because the RT-DA residual autocorrelation is ~0 (structural). Recommend keeping DA-anchor as the trend source and pursuing ensemble diversity, not a new solo deep model.",
+  "baseline_smape_floor50": 31.11,
+  "candidate_smape_floor50": 34.16,
+  "period_results": {
+    "1_8": {
+      "baseline": 22.61,
+      "candidate": 23.8
+    },
+    "9_16": {
+      "baseline": 53.07,
+      "candidate": 60.44
+    },
+    "17_24": {
+      "baseline": 17.65,
+      "candidate": 18.24
+    }
+  },
+  "spike_results": {
+    "baseline": 20.61,
+    "candidate": 21.69
+  },
+  "negative_results": {
+    "baseline": 64.06,
+    "candidate": 79.29
+  },
+  "cutoff_safety_result": "PASS (D14, ALL runs audited PASS)",
+  "known_risks": [
+    "RT-DA residual near-unpredictable from cutoff-safe features (root cause).",
+    "Deep models add variance/noise vs the strong DA anchor.",
+    "2.5 fused realtime (~23%) needs 4 diverse models not reproduced here individually."
+  ],
+  "required_followup": [
+    "Reproduce timesfm / timemixer / rt916 single-model D14 outputs to build a true diverse ensemble.",
+    "Re-evaluate only if a model strictly beats da_anchor on >=3 months in BOTH 2025 and 2026.",
+    "Consider period-specific / segment heads only as ensemble members, not solo replacements."
+  ]
+}
