@@ -1,0 +1,8 @@
+{
+  "p2_7_canonical_rerun": {
+    "recommended_status": "sgdfnet_only_candidate",
+    "justification": "Canonical 10-window: SGDFNet overall=20.2 vs DA=19.52 (delta=-0.68). SGDFNet wins 3/10 months. 3-month fusion: best=DA_anchor (18.14). P2.5 bug (midnight shift) fixed. Canonical loader verified (10/10 tests).",
+    "xlsx_bug_fixed": true,
+    "p2_5_results_valid": false
+  }
+}

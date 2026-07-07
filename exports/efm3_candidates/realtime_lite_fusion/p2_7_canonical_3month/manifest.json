@@ -1,0 +1,16 @@
+{
+  "experiment_id": "p2_7_canonical_3month",
+  "timestamp": "2026-07-07T10:07:06.036942+00:00",
+  "description": "P2.7 canonical rerun after fixing xlsx midnight shift bug",
+  "files": [
+    "monthly_metrics.json",
+    "scene_metrics.json",
+    "fusion_ablation_report.md",
+    "canonical_rerun_report.md",
+    "manifest.json",
+    "promotion_decision.json"
+  ],
+  "tests": "10/10 pytest passed",
+  "canonical_loader": "common/realtime_canonical_loader.py",
+  "elapsed_min": 0.3
+}

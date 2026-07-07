@@ -1,0 +1,38 @@
+{
+  "spike": {
+    "n": 1624,
+    "best_smape": 15.24,
+    "DA_anchor": 15.24,
+    "sgdfnet": 17.11
+  },
+  "negative": {
+    "n": 420,
+    "best_smape": 12.89,
+    "DA_anchor": 12.89,
+    "sgdfnet": 11.03
+  },
+  "normal": {
+    "n": 164,
+    "best_smape": 60.4,
+    "DA_anchor": 60.4,
+    "sgdfnet": 58.62
+  },
+  "1_8": {
+    "n": 828,
+    "best_smape": 18.07,
+    "DA_anchor": 18.07,
+    "sgdfnet": 18.47
+  },
+  "9_16": {
+    "n": 736,
+    "best_smape": 22.59,
+    "DA_anchor": 22.59,
+    "sgdfnet": 22.67
+  },
+  "17_24": {
+    "n": 644,
+    "best_smape": 13.15,
+    "DA_anchor": 13.15,
+    "sgdfnet": 15.61
+  }
+}
