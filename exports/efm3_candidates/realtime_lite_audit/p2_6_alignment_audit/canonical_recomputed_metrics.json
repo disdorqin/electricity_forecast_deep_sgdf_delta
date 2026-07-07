@@ -1,0 +1,44 @@
+{
+  "2025-03": {
+    "P2.5 buggy (xlsx_raw actual+DA)": {
+      "DA_anchor": 20.6,
+      "SGDFNet": 27.47,
+      "winner": "DA",
+      "n_days": 31
+    },
+    "CORRECTED (xlsx_shifted actual+DA)": {
+      "DA_anchor": 20.6,
+      "SGDFNet": 22.89,
+      "winner": "DA",
+      "n_days": 31
+    }
+  },
+  "2025-09": {
+    "P2.5 buggy (xlsx_raw actual+DA)": {
+      "DA_anchor": 13.3,
+      "SGDFNet": 17.99,
+      "winner": "DA",
+      "n_days": 30
+    },
+    "CORRECTED (xlsx_shifted actual+DA)": {
+      "DA_anchor": 13.3,
+      "SGDFNet": 13.75,
+      "winner": "DA",
+      "n_days": 30
+    }
+  },
+  "2026-05": {
+    "P2.5 buggy (xlsx_raw actual+DA)": {
+      "DA_anchor": 20.37,
+      "SGDFNet": 26.25,
+      "winner": "DA",
+      "n_days": 31
+    },
+    "CORRECTED (xlsx_shifted actual+DA)": {
+      "DA_anchor": 20.37,
+      "SGDFNet": 20.3,
+      "winner": "SGDFNet",
+      "n_days": 31
+    }
+  }
+}

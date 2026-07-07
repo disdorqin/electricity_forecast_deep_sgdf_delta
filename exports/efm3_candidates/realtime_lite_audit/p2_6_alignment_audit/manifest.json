@@ -1,0 +1,6 @@
+{
+  "root_cause": "P2_5_ALIGNMENT_BUG",
+  "recommendation": "FIX_P2_5_AND_RERUN",
+  "verdict": "FAIL",
+  "description": "P2.5 uses xlsx fallback with midnight shift bug. All P2.5 fusion results invalid."
+}
