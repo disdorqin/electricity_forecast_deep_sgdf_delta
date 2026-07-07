@@ -1,0 +1,25 @@
+{
+  "experiment_id": "p2_9_da_aware_gate",
+  "timestamp": "2026-07-07T10:18:14.731585+00:00",
+  "description": "DA-aware realtime gate with 11 variants, LOMO, time-split",
+  "files": [
+    "monthly_metrics.json",
+    "hour_scene_metrics.json",
+    "lomo_validation_metrics.json",
+    "time_split_metrics.json",
+    "rule_gate_report.md",
+    "ml_gate_report.md",
+    "leakage_audit.md",
+    "runtime_report.md",
+    "manifest.json",
+    "promotion_decision.json"
+  ],
+  "models_used": [
+    "DA_anchor",
+    "sgdfnet",
+    "timesfm",
+    "p3_risk_proxy"
+  ],
+  "canonical_loader": "common/realtime_canonical_loader.py",
+  "elapsed_min": 0.5
+}

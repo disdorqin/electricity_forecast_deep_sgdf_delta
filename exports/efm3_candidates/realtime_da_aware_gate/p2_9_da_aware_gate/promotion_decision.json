@@ -1,0 +1,17 @@
+{
+  "p2_9_da_aware_gate": {
+    "recommended_status": "da_sgdf_selector_candidate",
+    "justification": "DA overall=19.3, SGDFNet=19.95.Best gate=conservative_gate (19.23). LOMO: Logistic beats baselines on 0/10 months. Time-split: Logistic does not beat baselines on 2026 test. ConservativeGate ensures safe DA fallback. ",
+    "best_gate": "conservative_gate",
+    "best_rule_gate": "conservative_gate",
+    "best_rule_score": 19.23,
+    "da_anchor_overall": 19.3,
+    "sgdfnet_overall": 19.95,
+    "candidate_rules": {
+      "writes_submission_ready": false,
+      "replaces_champion": false,
+      "modifies_final_outputs": false,
+      "requires_shadow_adapter": true
+    }
+  }
+}

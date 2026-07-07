@@ -1,0 +1,62 @@
+{
+  "2025-03": {
+    "DA": 20.6,
+    "SGDFNet": 22.89,
+    "logistic_selector": 22.32,
+    "lightweight_tree": 20.78
+  },
+  "2025-04": {
+    "DA": 15.68,
+    "SGDFNet": 16.44,
+    "logistic_selector": 16.46,
+    "lightweight_tree": 15.66
+  },
+  "2025-05": {
+    "DA": 16.58,
+    "SGDFNet": 17.21,
+    "logistic_selector": 17.46,
+    "lightweight_tree": 16.87
+  },
+  "2025-06": {
+    "DA": 16.89,
+    "SGDFNet": 16.82,
+    "logistic_selector": 17.09,
+    "lightweight_tree": 16.89
+  },
+  "2025-09": {
+    "DA": 13.3,
+    "SGDFNet": 13.75,
+    "logistic_selector": 13.58,
+    "lightweight_tree": 13.3
+  },
+  "2025-10": {
+    "DA": 15.9,
+    "SGDFNet": 16.69,
+    "logistic_selector": 16.44,
+    "lightweight_tree": 15.9
+  },
+  "2026-03": {
+    "DA": 26.44,
+    "SGDFNet": 27.73,
+    "logistic_selector": 27.12,
+    "lightweight_tree": 26.44
+  },
+  "2026-04": {
+    "DA": 18.96,
+    "SGDFNet": 18.87,
+    "logistic_selector": 19.21,
+    "lightweight_tree": 18.96
+  },
+  "2026-05": {
+    "DA": 20.37,
+    "SGDFNet": 20.3,
+    "logistic_selector": 20.76,
+    "lightweight_tree": 20.37
+  },
+  "2026-06": {
+    "DA": 29.11,
+    "SGDFNet": 29.63,
+    "logistic_selector": 29.25,
+    "lightweight_tree": 29.11
+  }
+}
