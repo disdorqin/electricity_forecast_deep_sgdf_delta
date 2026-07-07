@@ -1,0 +1,72 @@
+{
+  "2025-03": {
+    "DA_anchor_smape": 31.86,
+    "sgdfnet_smape": 22.89,
+    "da_days": 31,
+    "sgdfnet_days": 31,
+    "total_days": 31
+  },
+  "2025-04": {
+    "DA_anchor_smape": 28.98,
+    "sgdfnet_smape": 16.44,
+    "da_days": 30,
+    "sgdfnet_days": 30,
+    "total_days": 30
+  },
+  "2025-05": {
+    "DA_anchor_smape": 26.89,
+    "sgdfnet_smape": 17.21,
+    "da_days": 31,
+    "sgdfnet_days": 31,
+    "total_days": 31
+  },
+  "2025-06": {
+    "DA_anchor_smape": 24.43,
+    "sgdfnet_smape": 16.82,
+    "da_days": 30,
+    "sgdfnet_days": 30,
+    "total_days": 30
+  },
+  "2025-09": {
+    "DA_anchor_smape": 19.57,
+    "sgdfnet_smape": 13.75,
+    "da_days": 30,
+    "sgdfnet_days": 30,
+    "total_days": 30
+  },
+  "2025-10": {
+    "DA_anchor_smape": 19.73,
+    "sgdfnet_smape": 16.69,
+    "da_days": 31,
+    "sgdfnet_days": 31,
+    "total_days": 31
+  },
+  "2026-03": {
+    "DA_anchor_smape": 31.79,
+    "sgdfnet_smape": 27.73,
+    "da_days": 31,
+    "sgdfnet_days": 31,
+    "total_days": 31
+  },
+  "2026-04": {
+    "DA_anchor_smape": 27.08,
+    "sgdfnet_smape": 18.87,
+    "da_days": 30,
+    "sgdfnet_days": 30,
+    "total_days": 30
+  },
+  "2026-05": {
+    "DA_anchor_smape": 25.67,
+    "sgdfnet_smape": 20.3,
+    "da_days": 31,
+    "sgdfnet_days": 31,
+    "total_days": 31
+  },
+  "2026-06": {
+    "DA_anchor_smape": 33.46,
+    "sgdfnet_smape": 31.29,
+    "da_days": 29,
+    "sgdfnet_days": 28,
+    "total_days": 30
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "p2_3_sgdfnet_lite": {
+    "recommended_status": "candidate",
+    "justification": "sgdfnet achieves 20.2 sMAPE_floor50 vs DA anchor 26.95 (improvement 6.75pp, 25.0%). CPU-only, 363/363 days, stable. However, candidate status (not shadow/champion) because: (a) no 3.0 shadow comparison, (b) P3 extreme price correction not integrated, (c) production adapter review pending. sgdfnet is the only production-viable realtime model from P2.2; timemixer/rt916/timesfm all have operational barriers."
+  }
+}

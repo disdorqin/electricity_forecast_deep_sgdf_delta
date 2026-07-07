@@ -1,0 +1,15 @@
+{
+  "experiment_id": "p2_3_sgdfnet_lite",
+  "timestamp": "2026-07-07T07:35:06.765584+00:00",
+  "description": "SGDFNet lite candidate — production-viable realtime model",
+  "files": [
+    "sgdfnet_lite_metrics.json",
+    "monthly_metrics.json",
+    "runtime_report.md",
+    "production_feasibility_report.md",
+    "manifest.json",
+    "promotion_decision.json"
+  ],
+  "source_window": "P2.2 fast closeout (10 spring/summer windows)",
+  "total_days": 363
+}
