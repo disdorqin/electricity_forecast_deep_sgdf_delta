@@ -1,0 +1,25 @@
+{
+  "experiment_id": "p2_12_winter_stress",
+  "timestamp": "2026-07-07T11:55:26.402490+00:00",
+  "description": "Winter hard-window shadow stress test (2025-11 to 2026-02)",
+  "files": [
+    "winter_monthly_metrics.json",
+    "winter_daily_metrics.csv",
+    "selector_shadow_summary.csv",
+    "p3_shadow_summary.csv",
+    "selector_p3_overlap_report.md",
+    "no_final_contamination_report.md",
+    "winter_failure_cases.md",
+    "runtime_report.md",
+    "manifest.json",
+    "promotion_decision.json"
+  ],
+  "winter_months": [
+    "2025-11",
+    "2025-12",
+    "2026-01",
+    "2026-02"
+  ],
+  "days_tested": 120,
+  "elapsed_min": 20.4
+}

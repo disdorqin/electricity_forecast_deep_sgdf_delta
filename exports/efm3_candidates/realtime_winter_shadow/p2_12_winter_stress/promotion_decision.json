@@ -1,0 +1,15 @@
+{
+  "p2_12_winter_stress": {
+    "recommended_status": "WINTER_NO_GO",
+    "justification": "Winter 0/4 months: SGDFNet does not beat DA_anchor. Selector shadow safe (no contamination). P3 shadow not available in simulation mode. Total 120 winter days tested. ",
+    "winter_da_overall": 24.35,
+    "winter_sgd_overall": 25.83,
+    "selector_avg_sgd_pct": 2.9,
+    "candidate_rules": {
+      "writes_submission_ready": false,
+      "replaces_champion": false,
+      "modifies_final_outputs": false,
+      "requires_shadow_adapter": true
+    }
+  }
+}
