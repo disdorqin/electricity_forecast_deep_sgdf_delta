@@ -1,0 +1,50 @@
+{
+  "spike": {
+    "n": 1624,
+    "best_smape": 15.24,
+    "DA_anchor_smape": 15.24,
+    "sgdfnet_smape": 20.58,
+    "best_vs_DA": 0.0,
+    "best_vs_sgd": -5.35
+  },
+  "negative": {
+    "n": 420,
+    "best_smape": 12.89,
+    "DA_anchor_smape": 12.89,
+    "sgdfnet_smape": 20.48,
+    "best_vs_DA": 0.0,
+    "best_vs_sgd": -7.59
+  },
+  "normal": {
+    "n": 164,
+    "best_smape": 60.4,
+    "DA_anchor_smape": 60.4,
+    "sgdfnet_smape": 66.44,
+    "best_vs_DA": 0.0,
+    "best_vs_sgd": -6.04
+  },
+  "1_8": {
+    "n": 828,
+    "best_smape": 16.37,
+    "DA_anchor_smape": 16.37,
+    "sgdfnet_smape": 24.07,
+    "best_vs_DA": 0.0,
+    "best_vs_sgd": -7.71
+  },
+  "9_16": {
+    "n": 736,
+    "best_smape": 23.44,
+    "DA_anchor_smape": 23.44,
+    "sgdfnet_smape": 29.9,
+    "best_vs_DA": 0.0,
+    "best_vs_sgd": -6.46
+  },
+  "17_24": {
+    "n": 644,
+    "best_smape": 14.37,
+    "DA_anchor_smape": 14.37,
+    "sgdfnet_smape": 17.05,
+    "best_vs_DA": 0.0,
+    "best_vs_sgd": -2.68
+  }
+}

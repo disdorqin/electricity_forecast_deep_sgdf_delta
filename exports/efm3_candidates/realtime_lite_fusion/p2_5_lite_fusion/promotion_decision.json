@@ -1,0 +1,17 @@
+{
+  "p2_5_lite_fusion": {
+    "recommended_status": "sgdfnet_only_candidate",
+    "justification": "Best variant: DA_anchor (18.14) vs SGDFNet (23.97) vs DA_anchor (18.14). SGDFNet alone beats DA anchor by -5.61pp on 10 windows. TimesFM available on 3 months only — fusion results limited to those windows. Gating model accuracy: 0.624. Scene checks: N/A. ",
+    "best_variant": "DA_anchor",
+    "best_variant_score": 18.14,
+    "sgdfnet_overall": 25.13,
+    "da_anchor_overall": 19.52,
+    "gate_model_accuracy": 0.624,
+    "candidate_rules": {
+      "writes_submission_ready": false,
+      "replaces_champion": false,
+      "modifies_final_outputs": false,
+      "requires_shadow_adapter": true
+    }
+  }
+}

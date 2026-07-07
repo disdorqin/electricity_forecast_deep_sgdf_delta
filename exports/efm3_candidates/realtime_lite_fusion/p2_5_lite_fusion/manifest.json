@@ -1,0 +1,49 @@
+{
+  "experiment_id": "p2_5_lite_fusion",
+  "timestamp": "2026-07-07T09:06:15.396041+00:00",
+  "description": "P2.5 Realtime Lite Multi-Candidate Fusion",
+  "files": [
+    "monthly_metrics.json",
+    "scene_metrics.json",
+    "runtime_report.md",
+    "fusion_ablation_report.md",
+    "gating_model_report.md",
+    "manifest.json",
+    "promotion_decision.json"
+  ],
+  "models_used": [
+    "DA_anchor",
+    "sgdfnet",
+    "timesfm"
+  ],
+  "test_windows_tfm": [
+    "2025-03",
+    "2025-09",
+    "2026-05"
+  ],
+  "test_windows_sgdfnet": [
+    "2025-03",
+    "2025-04",
+    "2025-05",
+    "2025-06",
+    "2025-09",
+    "2025-10",
+    "2026-03",
+    "2026-04",
+    "2026-05",
+    "2026-06"
+  ],
+  "fusion_variants": [
+    "DA_anchor",
+    "SGDFNet",
+    "TimesFM",
+    "simple_avg",
+    "sgd_dominant_07",
+    "sgd_dominant_08",
+    "period_aware",
+    "scene_aware",
+    "gating_model",
+    "p3_risk_proxy"
+  ],
+  "elapsed_min": 1.2
+}
